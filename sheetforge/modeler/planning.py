@@ -317,9 +317,9 @@ def heuristic_model(tables):
         return validate_model(plan.model_copy(update={"relationships": []}), tables)
 
 
-def plan_model(tables):
+def plan_model(tables, *, use_ai=True):
     fallback = heuristic_model(tables)
-    if not enabled():
+    if not use_ai or not enabled():
         return fallback, [
             "No-AI mode: used deterministic measures, verified key relationships, and report pages."
         ]

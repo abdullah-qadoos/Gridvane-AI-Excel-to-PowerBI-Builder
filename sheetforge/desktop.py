@@ -47,7 +47,7 @@ class InstanceLock:
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="sheetforge")
+    parser = argparse.ArgumentParser(prog="pivotra")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--control-file", type=Path, help=argparse.SUPPRESS)
@@ -79,13 +79,13 @@ def main(argv=None):
                 raise ValueError("Invalid local session")
             with build_opener(ProxyHandler({})).open(url + "/health", timeout=2) as response:
                 if json.load(response).get("app") != "sheetforge":
-                    raise ValueError("Not a SheetForge server")
-            print("SheetForge is already running: " + url)
+                    raise ValueError("Not a Pivotra server")
+            print("Pivotra is already running: " + url)
             if not args.no_browser:
                 webbrowser.open(url)
             return 0
         except (OSError, ValueError, KeyError):
-            print("SheetForge is starting in another window. Try again shortly.")
+            print("Pivotra is starting in another window. Try again shortly.")
             return 1
     from sheetforge.logging_setup import configure_logs
 
@@ -148,7 +148,7 @@ def main(argv=None):
                     },
                 )
             print(
-                f"SheetForge is ready: {url}\nType 'open UI' to open the browser or 'quit' to stop.",
+                f"Pivotra is ready: {url}\nType 'open UI' to open the browser or 'quit' to stop.",
                 flush=True,
             )
             if not args.no_browser:
@@ -164,7 +164,7 @@ def main(argv=None):
     except Exception as exc:
         logging.getLogger(__name__).error("Desktop startup failed (%s).", type(exc).__name__)
         print(
-            f"SheetForge could not start ({type(exc).__name__}). See {home / 'logs'}.",
+            f"Pivotra could not start ({type(exc).__name__}). See {home / 'logs'}.",
             file=sys.stderr,
         )
         return 1

@@ -79,6 +79,8 @@ def main():
                             return content if raw else json.loads(content)
 
                     assert request("/health")["status"] == "ok"
+                    for sample_name in ["transposed", "monthly", "multiple", "merged"]:
+                        assert request("/samples/" + sample_name, raw=True).startswith(b"PK")
                     if launch == 0:
                         duplicate = subprocess.run(
                             [str(executable), "--no-browser"],
@@ -91,7 +93,7 @@ def main():
                         )
                         assert duplicate.returncode == 0, duplicate.stderr + duplicate.stdout
                         assert "already running" in duplicate.stdout
-                    assert b"SheetForge" in request("/", raw=True)
+                    assert b"Pivotra" in request("/", raw=True)
                     if launch == 0:
                         uploaded = request("/upload?filename=review.xlsx", fixture.read_bytes())
                         ids = {
@@ -110,9 +112,13 @@ def main():
                         )
                     preview = request("/preview?run_id=" + ids["run_id"])
                     assert next(iter(preview["tables"].values()))["row_count"] == 2
+                    assert len(preview["kpis"]) == 4
+                    assert request("/download/excel?run_id=" + ids["run_id"], raw=True).startswith(
+                        b"PK"
+                    )
                     downloaded = request("/download?run_id=" + ids["run_id"], raw=True)
                     with zipfile.ZipFile(io.BytesIO(downloaded)) as archive:
-                        assert any(name.endswith("SheetForge.pbip") for name in archive.namelist())
+                        assert any(name.endswith("Pivotra.pbip") for name in archive.namelist())
                         for name in archive.namelist():
                             if name.endswith((".tmdl", ".json", ".pbip", ".pbir", ".pbism")):
                                 assert not archive.read(name).startswith(b"\xef\xbb\xbf")

@@ -1,85 +1,93 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="sheetforge-token"]').content;
-let project = null, run = null, profile = null, cleaned = {}, busy = false;
-const el = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
-async function api(path, body, options = {}) {
-  const headers = { "X-SheetForge-Token": token, ...options.headers };
-  if (body !== undefined && !(body instanceof File)) { headers["Content-Type"] = "application/json"; body = JSON.stringify(body); }
-  const response = await fetch(path, { method: body === undefined ? "GET" : "POST", body, ...options, headers });
-  if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error((data.detail || "The request failed.") + (data.errors ? " " + data.errors.map(error => error.msg).join(" ") : "")); }
+const el = (tag, value, cls) => { const node=document.createElement(tag); if(value!=null)node.textContent=value; if(cls)node.className=cls; return node; };
+let project=null, run=null, profile=null, cleaned={}, busy=false, pendingFile=null;
+const privacy=()=>document.querySelector('input[name="privacy"]:checked').value;
+const ids=()=>({project_id:project.id,run_id:run?.id || null});
+const pretty=value=>JSON.stringify(value,null,2);
+function preference(key,value) { try { if(value===undefined)return localStorage.getItem('pivotra.'+key); localStorage.setItem('pivotra.'+key,value); } catch {} }
+function setTheme(theme) { document.documentElement.dataset.theme=theme; $('theme-toggle').textContent=theme==='dark'?'☀':'☾'; $('theme-toggle').setAttribute('aria-label','Switch to '+(theme==='dark'?'light':'dark')+' theme'); preference('theme',theme); }
+setTheme(preference('theme') || (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));
+$('theme-toggle').addEventListener('click',()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
+async function api(path,body,options={}) {
+  const headers={'X-SheetForge-Token':token,...options.headers};
+  if(body!==undefined && !(body instanceof File)){headers['Content-Type']='application/json';body=JSON.stringify(body);}
+  const response=await fetch(path,{method:body===undefined?'GET':'POST',body,...options,headers});
+  if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error((data.detail||'The request failed.')+(data.errors?' '+data.errors.map(e=>e.msg).join(' '):''));}
   return response;
 }
-async function json(path, body) { return (await api(path, body)).json(); }
-function notice(text, error = false) { $("notice").hidden = !text; $("notice").textContent = text; $("notice").classList.toggle("error", error); }
-function controls() {
-  for (const button of document.querySelectorAll("button,input,select,textarea")) button.disabled = busy;
-  $("apply-plan").disabled = busy || !project || !$("cleaning-json").value;
-  $("make-model").disabled = busy || !run || !["applied", "modeled"].includes(run.status);
-  $("review-model").disabled = busy || !run || !["applied", "modeled"].includes(run.status) || !$("model-json").value;
-  $("generate").disabled = busy || run?.status !== "modeled";
-  $("download").disabled = busy || run?.status !== "generated";
-  $("run-status").textContent = run?.status || "Uploaded";
-  document.body.setAttribute("aria-busy", String(busy));
+async function json(path,body){return(await api(path,body)).json();}
+function notice(message,error=false){$('notice').hidden=!message;$('notice').textContent=message;$('notice').classList.toggle('error',error);}
+function controls(){
+  for(const item of document.querySelectorAll('button,input,select,textarea'))item.disabled=busy;
+  $('build').disabled=busy||(!pendingFile&&!project);
+  $('make-plan').disabled=busy||!project;
+  $('apply-plan').disabled=busy||!project||!$('cleaning-json').value;
+  const ready=run&&['applied','modeled','generated'].includes(run.status);
+  $('make-model').disabled=busy||!ready;$('review-model').disabled=busy||!ready||!$('model-json').value;
+  $('generate').disabled=busy||run?.status!=='modeled';$('download').disabled=busy||run?.status!=='generated';$('download-excel').disabled=busy||!ready;
+  $('run-status').textContent=run?.status || 'Uploaded';document.body.setAttribute('aria-busy',String(busy));
 }
-async function task(message, work) { if (busy) return; busy = true; controls(); notice(message); try { await work(); notice(""); } catch(error) { notice(error.message, true); } finally { busy = false; controls(); } }
-function table(target, columns, rows) {
-  const node = el("table"), head = el("thead"), tr = el("tr");
-  columns.forEach(column => tr.append(el("th", column))); head.append(tr); node.append(head);
-  const body = el("tbody"); for (const row of rows) { const item = el("tr"); for (const value of row) item.append(el("td", value == null ? "—" : value)); body.append(item); } node.append(body); $(target).replaceChildren(node);
+async function task(message,work){if(busy)return;busy=true;controls();notice(message);try{await work();notice('');}catch(error){notice(error.message,true);if($('settings').open)$('settings-notice').textContent=error.message;}finally{busy=false;controls();}}
+function table(target,columns,rows){const node=el('table'),head=el('thead'),tr=el('tr');columns.forEach(c=>tr.append(el('th',c)));head.append(tr);node.append(head);const body=el('tbody');for(const row of rows){const item=el('tr');for(const value of row)item.append(el('td',value==null?'—':value));body.append(item);}node.append(body);$(target).replaceChildren(node);}
+function before(){const name=$('sheet').value||Object.keys(profile?.sheets||{})[0],sheet=profile?.sheets[name];if(!sheet)return;$('profile-stats').replaceChildren(el('span',sheet.shape[0]+' rows'),el('span',sheet.shape[1]+' columns'),el('span',sheet.blocks.length+' tables detected'));table('before',['Row',...Array.from({length:sheet.shape[1]},(_,i)=>'Column '+(i+1))],sheet.sample.slice(0,20).map(row=>[row.row+1,...row.values]));}
+function renderKpis(cards=[]){if(!cards.length)cards=['Usable rows','Total spend','Total usage','Average utilization'].map(label=>({label,value:null,delta:null,note:'Clean your data to calculate'}));$('metrics').replaceChildren(...cards.map(item=>{const card=el('article',null,'panel kpi');card.append(el('h3',item.label),el('strong',item.value==null?'—':new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(item.value)+(item.unit||'')));const delta=el('div',item.delta==null?'No prior-week comparison':new Intl.NumberFormat(undefined,{maximumFractionDigits:1,signDisplay:'exceptZero'}).format(item.delta)+'% vs prior week','delta');delta.title=item.period_note||'Requires dates and values in consecutive weeks.';card.append(delta,el('small',item.value==null?'Not available for this data':item.note));return card;}));}
+function renderAfter(){const data=cleaned[$('table-select').value];if(!data){$('after').replaceChildren(el('p','Clean your workbook to see the difference.','helper'));$('after-stats').replaceChildren();return;}$('after-stats').replaceChildren(el('span',data.row_count+' usable rows'),el('span',data.columns.length+' columns'),el('span','First 30 records'));table('after',data.columns,data.rows.map(row=>data.columns.map(c=>row[c])));}
+function after(data){cleaned=data.tables||{};$('table-select').replaceChildren(...Object.keys(cleaned).map(name=>new Option(name,name)));renderAfter();renderKpis(data.kpis);$('audit').replaceChildren(...(data.steps||[]).map(step=>el('li',step.table+' · '+step.description)));$('warnings').textContent=(data.warnings||[]).join(' ');}
+function renderPlan(){
+  const target=$('plan-steps');target.replaceChildren();let plan;try{plan=JSON.parse($('cleaning-json').value);}catch{return;}
+  for(const spec of [plan,...(plan.tables_split||[])]){
+    target.append(el('h3',spec.table_name,'plan-table-title'));
+    const add=(label,value,kind,change)=>{const row=el('label',null,'plan-step'),input=el('input');input.type=kind;if(kind==='checkbox')input.checked=value;else{input.value=value;input.min='1';input.step='1';}input.setAttribute('aria-label',label+' for '+spec.table_name);input.addEventListener('change',()=>{change(kind==='checkbox'?input.checked:Number(input.value));$('cleaning-json').value=pretty(plan);controls();});row.append(el('b',String(target.querySelectorAll('.plan-step').length+1)),el('span',label),input);target.append(row);};
+    add('Promote header row (within detected table)',spec.header_row_index+1,'number',value=>{spec.header_row_index=value-1;spec.multi_row_header_rows=[];spec.data_start_row=Math.max(spec.data_start_row,value);});
+    add('First data row',spec.data_start_row+1,'number',value=>spec.data_start_row=value-1);
+    add('Transpose the table',spec.orientation==='transposed','checkbox',checked=>{spec.orientation=checked?'transposed':'normal';spec.data_end_row=checked?spec.bounds.column_end-spec.bounds.column_start:spec.bounds.row_end-spec.bounds.row_start;});
+    const totals=[...spec.totals_rows_to_drop];add('Remove detected totals ('+totals.length+' rows)',totals.length>0,'checkbox',checked=>spec.totals_rows_to_drop=checked?totals:[]);
+    if(spec.unpivot_columns.length){const months=[...spec.unpivot_columns];add('Unpivot '+months.length+' wide columns into rows',true,'checkbox',checked=>spec.unpivot_columns=checked?months:[]);}
+  }
 }
-function before() {
-  const name = $("sheet").value || Object.keys(profile?.sheets || {})[0]; const sheet = profile?.sheets[name]; if (!sheet) return;
-  $("profile-stats").replaceChildren(el("span", sheet.shape[0] + " rows"), el("span", sheet.shape[1] + " columns"), el("span", sheet.blocks.length + " tables detected"));
-  const sample = sheet.sample.slice(0, 20); table("before", ["Row", ...Array.from({length: sheet.shape[1]}, (_, i) => "Column " + (i + 1))], sample.map(row => [row.row + 1, ...row.values]));
+function renderModel(){const target=$('model-preview');target.replaceChildren();let model;try{model=JSON.parse($('model-json').value);}catch{target.append(el('p','Build a project to see your model here.','helper'));return;}
+  for(const [label,items] of [['Tables',model.tables],['Relationships',model.relationships],['Measures',model.measures]]){
+    const group=el('div',null,'model-group');group.append(el('h3',label+' · '+items.length));
+    const draw=item=>{const block=el('div',null,'model-item');if(label==='Tables')block.append(el('strong',item.name),el('small',item.role));else if(label==='Relationships')block.append(el('strong',item.from_table+'.'+item.from_column),el('small','→ '+item.to_table+'.'+item.to_column+' · many to one'));else { const code=el('small'); code.append(el('code',item.dax)); block.append(el('strong',item.name),code); }return block;};
+    if(!items.length)group.append(el('p','No relationships needed for this model.','helper'));
+    items.slice(0,4).forEach(item=>group.append(draw(item)));if(items.length>4){const details=el('details');details.append(el('summary','View '+(items.length-4)+' more'));items.slice(4).forEach(item=>details.append(draw(item)));group.append(details);}target.append(group);
+  }
 }
-function after(data) {
-  cleaned = data.tables || {}; $("table-select").replaceChildren(...Object.keys(cleaned).map(name => new Option(name, name))); renderAfter();
-  $("audit").replaceChildren(...(data.steps || []).map(step => el("li", step.table + " · " + step.description)));
-  $("warnings").textContent = (data.warnings || []).join(" ");
-}
-function renderAfter() {
-  const data = cleaned[$("table-select").value];
-  if (!data) { $("after").replaceChildren(el("p", "Apply a cleaning plan to preview the result.", "helper")); $("after-stats").replaceChildren(); return; }
-  $("after-stats").replaceChildren(el("span", data.row_count + " cleaned records"), el("span", data.columns.length + " columns"), el("span", "Preview: first 30 rows"));
-  table("after", data.columns, data.rows.map(row => data.columns.map(column => row[column])));
-}
-async function refreshProjects() {
-  const data = await json("/projects"); $("project-list").replaceChildren();
-  for (const item of data.projects) { const button = el("button", null, "project-item" + (project?.id === item.id ? " selected" : "")); button.append(el("span", item.name), el("small", new Date(item.created_at).toLocaleDateString())); button.addEventListener("click", () => task("Opening project…", () => openProject(item))); $("project-list").append(button); }
-  return data.projects;
-}
-async function refreshRuns() {
-  const data = await json("/runs?project_id=" + project.id); $("run-select").replaceChildren(...data.runs.map(item => new Option(new Date(item.created_at).toLocaleString() + " · " + item.status, item.id))); if(run) $("run-select").value = run.id; return data.runs;
-}
-async function setRun(item) {
-  run = item; $("cleaning-json").value = item?.cleaning_plan_json ? JSON.stringify(JSON.parse(item.cleaning_plan_json), null, 2) : ""; $("model-json").value = item?.model_plan_json ? JSON.stringify(JSON.parse(item.model_plan_json), null, 2) : "";
-  after(item ? await json("/preview?run_id=" + item.id) : {});
-}
-async function openProject(item) {
-  project = item; profile = await json("/profile?project_id=" + item.id); $("empty").hidden = true; $("workspace").hidden = false; $("project-name").textContent = item.name;
-  $("source-description").textContent = "Refresh source: " + item.source_path;
-  $("sheet").replaceChildren(new Option("All sheets", ""), ...Object.keys(profile.sheets).map(name => new Option(name, name))); $("sheet").value = ""; before();
-  const runs = await refreshRuns(); await setRun(runs[0] || null); await refreshProjects();
-}
-$("choose-file").addEventListener("click", () => $("upload").click());
-$("upload").addEventListener("change", event => { const file = event.target.files[0]; event.target.value = ""; if(file) task("Profiling workbook…", async () => { const result = await json("/upload?filename=" + encodeURIComponent(file.name), file); await openProject(result.project); }); });
-$("path-form").addEventListener("submit", event => { event.preventDefault(); task("Reading local workbook…", async () => { const result = await json("/upload", { source_path: $("source-path").value }); await openProject(result.project); }); });
-$("sheet").addEventListener("change", before);
-$("table-select").addEventListener("change", renderAfter);
-$("cleaning-json").addEventListener("input", controls);
-$("model-json").addEventListener("input", controls);
-$("make-plan").addEventListener("click", () => task("Inspecting layout and proposing a cleaning plan…", async () => { const result = await json("/plan", { project_id: project.id, run_id: run?.id || null, sheet: $("sheet").value || null }); await setRun(result.run); await refreshRuns(); }));
-$("apply-plan").addEventListener("click", () => task("Applying the reviewed plan with pandas…", async () => { const proposed = JSON.parse($("cleaning-json").value); const planned = await json("/plan", { project_id: project.id, run_id: run?.id || null, cleaning_plan: proposed }); run = planned.run; const result = await json("/apply", { project_id: project.id, run_id: run.id }); run = result.run; after(result); $("model-json").value = ""; await refreshRuns(); }));
-$("make-model").addEventListener("click", () => task("Planning measures and report pages…", async () => { const result = await json("/model", { project_id: project.id, run_id: run.id }); run = result.run; $("model-json").value = JSON.stringify(result.model_plan, null, 2); await refreshRuns(); }));
-$("review-model").addEventListener("click", () => task("Validating the edited semantic model…", async () => { const result = await json("/model", { project_id: project.id, run_id: run.id, model_plan: JSON.parse($("model-json").value) }); run = result.run; await refreshRuns(); }));
-$("generate").addEventListener("click", () => task("Generating TMDL, native visuals, and a validated PBIP folder…", async () => { const result = await json("/generate", { project_id: project.id, run_id: run.id }); run = result.run; await refreshRuns(); }));
-$("download").addEventListener("click", () => task("Preparing your download…", async () => { const response = await api("/download?run_id=" + run.id); const url = URL.createObjectURL(await response.blob()); const link = el("a"); link.href = url; link.download = "SheetForge-powerbi.zip"; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }));
-$("run-select").addEventListener("change", () => task("Loading saved run…", async () => { const items = await json("/runs?project_id=" + project.id); await setRun(items.runs.find(item => item.id === $("run-select").value)); }));
-async function modelMode() { const settings = await json("/settings"); $("mode").textContent = settings.provider === "none" ? "No-AI · offline" : settings.provider + " · " + settings.model; return settings; }
-$("settings-open").addEventListener("click", () => task("Loading model settings…", async () => { const data = await modelMode(); $("provider").value = data.provider; $("model-id").value = data.model; $("base-url").value = data.base_url || ""; $("api-version").value = data.api_version || ""; $("api-key").value = ""; $("settings-notice").textContent = data.has_key ? "A saved key is available." : "No key is required for no-AI mode or local Ollama."; $("settings").showModal(); }));
-$("settings").addEventListener("close", () => { $("api-key").value = ""; });
-$("provider").addEventListener("change", () => { if($("provider").value === "ollama") task("Looking for local Ollama models…", async () => { const result = await json("/settings/ollama"); $("ollama-models").replaceChildren(...result.models.map(name => new Option(name, name))); $("ollama-status").textContent = result.available ? "Available local models are listed in the model field." : "Ollama was not detected at localhost:11434. Start Ollama and try again."; $("base-url").value = "http://localhost:11434"; }); });
-$("settings-form").addEventListener("submit", event => { event.preventDefault(); task("Saving settings…", async () => { await json("/settings", { provider: $("provider").value, model: $("model-id").value, base_url: $("base-url").value || null, api_version: $("api-version").value || null, api_key: $("api-key").value || null }); $("api-key").value = ""; await modelMode(); $("settings-notice").textContent = "Settings saved. Keys are stored only in the credential manager."; }); });
-$("test-model").addEventListener("click", () => task("Testing the saved connection…", async () => { const result = await json("/settings/test", {}); $("settings-notice").textContent = result.message; }));
-task("Opening SheetForge…", async () => { await modelMode(); const items = await refreshProjects(); if(items.length) await openProject(items[0]); });
+async function refreshProjects(){const data=await json('/projects');$('project-list').replaceChildren(...data.projects.map(item=>{const button=el('button',null,'project-item');button.append(el('strong',item.name),el('small',new Date(item.created_at).toLocaleDateString()));button.addEventListener('click',()=>task('Opening project…',async()=>{await openProject(item);$('projects').close();}));return button;}));if(!data.projects.length)$('project-list').append(el('p','Your saved projects will appear here.','helper'));return data.projects;}
+async function refreshRuns(){const data=await json('/runs?project_id='+project.id);$('run-select').replaceChildren(...data.runs.map(item=>new Option(new Date(item.created_at).toLocaleString()+' · '+item.status,item.id)));if(run)$('run-select').value=run.id;return data.runs;}
+async function setRun(item){run=item;$('cleaning-json').value=item?.cleaning_plan_json?pretty(JSON.parse(item.cleaning_plan_json)):'';$('model-json').value=item?.model_plan_json?pretty(JSON.parse(item.model_plan_json)):'';after(item?await json('/preview?run_id='+item.id):{});renderPlan();renderModel();}
+async function openProject(item){project=item;preference('project',item.id);profile=await json('/profile?project_id='+item.id);document.body.classList.add('has-project');$('empty').hidden=true;$('workspace').hidden=false;$('project-name').textContent=item.name;if(!pendingFile){$('file-placeholder').textContent=item.name;$('file-caption').textContent='Your saved workbook is ready to build again.';}$('source-description').textContent='Refresh source: '+item.source_path;$('sheet').replaceChildren(new Option('All worksheets',''),...Object.keys(profile.sheets).map(name=>new Option(name,name)));before();await setRun((await refreshRuns())[0]||null);await refreshProjects();}
+function selectFile(file){if(!/\.(xlsx|csv)$/i.test(file.name))throw new Error('Choose an .xlsx or .csv file.');if(file.size>8*1024*1024)throw new Error('Choose a file under 8 MB.');pendingFile=file;$('file-placeholder').textContent=file.name;$('file-caption').textContent='Ready when you are. Review your privacy mode, then build.';controls();}
+$('drop-zone').addEventListener('click',()=>$('upload').click());$('upload').addEventListener('change',event=>{try{if(event.target.files[0])selectFile(event.target.files[0]);notice('');}catch(error){notice(error.message,true);}event.target.value='';});
+for(const name of ['dragenter','dragover'])$('drop-zone').addEventListener(name,event=>{event.preventDefault();if(!busy)$('drop-zone').classList.add('drag-over');});
+for(const name of ['dragleave','drop'])$('drop-zone').addEventListener(name,event=>{event.preventDefault();$('drop-zone').classList.remove('drag-over');if(name==='drop'&&!busy){try{if(event.dataTransfer.files[0])selectFile(event.dataTransfer.files[0]);}catch(error){notice(error.message,true);}}});
+for(const button of document.querySelectorAll('[data-sample]'))button.addEventListener('click',()=>task('Preparing sample workbook…',async()=>{const response=await api('/samples/'+button.dataset.sample);selectFile(new File([await response.blob()],button.textContent.replace(' ↗','')+'.xlsx'));}));
+async function applyReviewed(){const planned=await json('/plan',{...ids(),cleaning_plan:JSON.parse($('cleaning-json').value),privacy:privacy()});run=planned.run;const result=await json('/apply',ids());run=result.run;after(result);renderPlan();}
+async function ensureApplied(){if(!['applied','modeled'].includes(run?.status))await applyReviewed();}
+async function modelAndGenerate(){notice('Building your data model…');const modeled=await json('/model',{...ids(),privacy:privacy()});run=modeled.run;$('model-json').value=pretty(modeled.model_plan);renderModel();notice('Preparing your Power BI project…');run=(await json('/generate',ids())).run;await refreshRuns();}
+$('build').addEventListener('click',()=>task('Inspecting your workbook…',async()=>{if(pendingFile){const uploaded=await json('/upload?filename='+encodeURIComponent(pendingFile.name),pendingFile);await openProject(uploaded.project);pendingFile=null;}const planned=await json('/plan',{...ids(),sheet:$('sheet').value||null,privacy:privacy()});run=planned.run;$('cleaning-json').value=pretty(planned.plan);renderPlan();await applyReviewed();await modelAndGenerate();$('workspace').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'});}));
+$('make-plan').addEventListener('click',()=>task('Suggesting a cleaning plan…',async()=>{const result=await json('/plan',{...ids(),sheet:$('sheet').value||null,privacy:privacy()});await setRun(result.run);await refreshRuns();}));
+$('apply-plan').addEventListener('click',()=>task('Re-running your reviewed steps…',async()=>{await applyReviewed();await modelAndGenerate();}));
+$('make-model').addEventListener('click',()=>task('Suggesting a model…',async()=>{await ensureApplied();const result=await json('/model',{...ids(),privacy:privacy()});run=result.run;$('model-json').value=pretty(result.model_plan);renderModel();await refreshRuns();}));
+$('review-model').addEventListener('click',()=>task('Validating your edited model…',async()=>{const edited=JSON.parse($('model-json').value);await ensureApplied();run=(await json('/model',{...ids(),model_plan:edited,privacy:privacy()})).run;renderModel();await refreshRuns();}));
+$('generate').addEventListener('click',()=>task('Generating the reviewed project…',async()=>{run=(await json('/model',{...ids(),model_plan:JSON.parse($('model-json').value),privacy:privacy()})).run;run=(await json('/generate',ids())).run;await refreshRuns();}));
+async function download(path,filename){const response=await api(path),url=URL.createObjectURL(await response.blob()),link=el('a');link.href=url;link.download=filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+$('download').addEventListener('click',()=>task('Preparing Power BI download…',()=>download('/download?run_id='+run.id,'Pivotra-powerbi.zip')));$('download-excel').addEventListener('click',()=>task('Preparing your cleaned workbook…',()=>download('/download/excel?run_id='+run.id,'Pivotra-cleaned.xlsx')));
+$('path-form').addEventListener('submit',event=>{event.preventDefault();task('Opening local workbook…',async()=>{await openProject((await json('/upload',{source_path:$('source-path').value})).project);});});
+$('sheet').addEventListener('change',before);$('table-select').addEventListener('change',renderAfter);$('cleaning-json').addEventListener('input',()=>{renderPlan();controls();});$('model-json').addEventListener('input',()=>{renderModel();controls();});
+$('run-select').addEventListener('change',()=>task('Opening saved run…',async()=>{const selected=$('run-select').value;await setRun((await json('/runs?project_id='+project.id)).runs.find(item=>item.id===selected));}));
+$('new-project').addEventListener('click',()=>{project=run=profile=pendingFile=null;cleaned={};preference('project','');document.body.classList.remove('has-project');$('workspace').hidden=true;$('empty').hidden=false;$('file-placeholder').textContent='Drop an .xlsx or .csv here.';$('file-caption').textContent='Even a messy one is enough to start.';notice('');controls();window.scrollTo({top:0,behavior:'smooth'});});
+$('projects-open').addEventListener('click',()=>task('Opening saved projects…',async()=>{await refreshProjects();$('projects').showModal();}));$('projects-close').addEventListener('click',()=>$('projects').close());
+function privacyHelp(){const notes={local:'Your file stays on this device. Cloud providers are off; local Ollama is allowed.',masked:'Sample cell values are masked. Column names and statistics may be sent to your chosen provider.',sample:'Up to 20 first + 5 last rows, column names and statistics may be sent. Bulk data is never shared.'};$('privacy-help').textContent=notes[privacy()];}
+for(const input of document.querySelectorAll('[name=privacy]'))input.addEventListener('change',privacyHelp);
+async function modelMode(){const data=await json('/settings');$('mode').textContent=data.provider==='none'?'No-AI · offline':data.provider+' · '+data.model;return data;}
+async function openSettings(provider){const data=await modelMode();$('provider').value=provider||data.provider;$('model-id').value=!provider||provider===data.provider?data.model:'';$('base-url').value=provider&&provider!==data.provider?'':data.base_url||'';$('api-version').value=data.api_version||'';$('api-key').value='';$('settings-notice').textContent='Choose a model ID and save. API keys stay in Windows Credential Manager.';$('settings').showModal();}
+$('settings-open').addEventListener('click',()=>task('Opening model settings…',()=>openSettings()));$('settings').addEventListener('close',()=>{$('api-key').value='';});
+async function discover(){const data=await json('/settings/ollama');$('ollama-models').replaceChildren(...data.models.map(name=>new Option(name,name)));$('ollama-status').textContent=data.available?'Available local models are listed in the model field.':'Ollama was not detected at localhost:11434.';return data;}
+$('quick-provider').addEventListener('change',()=>task('Updating provider…',async()=>{const selected=$('quick-provider').value,current=await modelMode();if(selected==='none'){await json('/settings',{provider:'none',model:''});await modelMode();}else if(selected==='auto'){const data=await discover();if(data.models.length){await json('/settings',{provider:'ollama',model:data.models[0],base_url:'http://localhost:11434'});$('quick-provider').value='ollama';await modelMode();}else{await openSettings('ollama');$('settings-notice').textContent='Ollama was not detected. Start Ollama, or choose another provider. No-AI mode still works.';}}else if(current.provider!==selected)await openSettings(selected);}));
+$('provider').addEventListener('change',()=>{if($('provider').value==='ollama')task('Checking local Ollama…',async()=>{await discover();$('base-url').value='http://localhost:11434';});});
+$('settings-form').addEventListener('submit',event=>{event.preventDefault();task('Saving model settings…',async()=>{await json('/settings',{provider:$('provider').value,model:$('model-id').value,base_url:$('base-url').value||null,api_version:$('api-version').value||null,api_key:$('api-key').value||null});$('api-key').value='';$('quick-provider').value=$('provider').value;await modelMode();$('settings-notice').textContent='Settings saved. Privacy mode still controls whether cloud requests are allowed.';});});
+$('test-model').addEventListener('click',()=>task('Testing saved connection…',async()=>{$('settings-notice').textContent=(await json('/settings/test',{})).message;}));
+task('Opening Pivotra…',async()=>{const settings=await modelMode();$('quick-provider').value=settings.provider;privacyHelp();const projects=await refreshProjects(),saved=projects.find(item=>item.id===preference('project'));if(saved)await openProject(saved);});

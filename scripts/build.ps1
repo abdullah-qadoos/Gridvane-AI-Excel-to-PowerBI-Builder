@@ -22,9 +22,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Lint failed.' }
 & $pythonExe -m PyInstaller --clean --noconfirm sheetforge.spec
 if ($LASTEXITCODE -ne 0) { throw 'Executable build failed.' }
 if (-not $SkipSmoke) {
-    & $pythonExe scripts/smoke_exe.py dist/sheetforge/sheetforge.exe
+    & $pythonExe scripts/smoke_exe.py dist/pivotra/pivotra.exe
     if ($LASTEXITCODE -ne 0) { throw 'Executable smoke test failed.' }
 }
-Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $projectRoot 'dist\sheetforge\README.md')
-Compress-Archive -LiteralPath (Join-Path $projectRoot 'dist\sheetforge') -DestinationPath (Join-Path $projectRoot 'dist\sheetforge-windows-x64.zip') -Force
-Write-Output 'Portable build: dist\sheetforge\sheetforge.exe (keep the entire folder together).'
+Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $projectRoot 'dist\pivotra\README.md')
+Compress-Archive -LiteralPath (Join-Path $projectRoot 'dist\pivotra') -DestinationPath (Join-Path $projectRoot 'dist\pivotra-windows-x64.zip') -Force
+Write-Output 'Portable build: dist\pivotra\pivotra.exe (keep the entire folder together).'

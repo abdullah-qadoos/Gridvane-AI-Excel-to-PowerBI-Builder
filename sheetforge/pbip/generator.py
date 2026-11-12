@@ -154,9 +154,9 @@ def build_project(result, out, table_name=None):
         ),
         record_column,
     )
-    report_dir, model_dir = "SheetForge.Report", "SheetForge.SemanticModel"
+    report_dir, model_dir = "Pivotra.Report", "Pivotra.SemanticModel"
     documents = {
-        "SheetForge.pbip": {
+        "Pivotra.pbip": {
             "$schema": SCHEMA + "pbip/pbipProperties/1.0.0/schema.json",
             "version": "1.0",
             "artifacts": [{"report": {"path": report_dir}}],
@@ -197,7 +197,7 @@ def build_project(result, out, table_name=None):
         report_dir + "/definition/pages/overview/page.json": {
             "$schema": SCHEMA + "item/report/definition/page/2.0.0/schema.json",
             "name": "overview",
-            "displayName": "SheetForge overview",
+            "displayName": "Pivotra overview",
             "displayOption": "FitToPage",
             "width": 1280,
             "height": 720,
@@ -269,7 +269,7 @@ def build_project(result, out, table_name=None):
         + "\n",
         model_dir + "/definition/tables/Table001.tmdl": table_text,
         model_dir + "/definition/relationships.tmdl": "",
-        "OPEN_IN_DESKTOP.txt": "SheetForge - step 3 review\n\nOpen SheetForge.pbip in a current Power BI Desktop version supporting PBIP/PBIR. Enable the project preview if required.\nSelect Refresh to load the source workbook. If prompted for file privacy, choose the appropriate local file privacy level.\n\nSource workbook: "
+        "OPEN_IN_DESKTOP.txt": "Pivotra - step 3 review\n\nOpen Pivotra.pbip in a current Power BI Desktop version supporting PBIP/PBIR. Enable the project preview if required.\nSelect Refresh to load the source workbook. If prompted for file privacy, choose the appropriate local file privacy level.\n\nSource workbook: "
         + str(result.source)
         + "\n\nThe model reads this ORIGINAL XLSX through Excel.Workbook(File.Contents(...)). No spreadsheet rows are embedded in this project.\nKeep the workbook at the original path; change the File.Contents path in Power Query if it moves. Data-value updates refresh in Desktop. The final table can grow when records are appended; header/layout changes require regenerating the plan/project.\n\nThe _Record helper distinguishes duplicate source records in the table visual. Numeric measures use SUM, without invented units or currency.\n\nPBIR JSON has passed the bundled Microsoft schemas. TMDL/M execution and visual rendering are pending your Desktop feedback. Report any exact error text before steps 4-6 proceed.\n",
     }
@@ -288,4 +288,4 @@ def build_project(result, out, table_name=None):
         for path in sorted(out.rglob("*")):
             if path.is_file():
                 archive.write(path, str(Path(out.name) / path.relative_to(out)))
-    return out / "SheetForge.pbip", zip_path
+    return out / "Pivotra.pbip", zip_path

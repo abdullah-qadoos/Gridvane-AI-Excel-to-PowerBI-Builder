@@ -1,4 +1,4 @@
-# SheetForge
+# Pivotra
 
 Python 3.11 · pandas transforms data · validated JSON plans explain decisions · no-AI mode works offline.
 
@@ -9,7 +9,7 @@ Python 3.11 · pandas transforms data · validated JSON plans explain decisions 
 3. Minimal refreshable TMDL/PBIR project: one table, one page, card + bar + table. **Generated and JSON-validated; stopped for the user's Power BI Desktop feedback. 44 tests pass.**
 4. Semantic modeler, verified relationships, and multiple report pages. **Complete: 53 tests pass.**
 5. FastAPI and minimal UI: upload, before/after previews, plan overrides, model, generate, download, and settings. **Complete: 62 tests pass.**
-6. Windows packaging and smoke test: launch `sheetforge.exe`, hit `/health`, shut it down. **Complete: the built executable passed runtime imports, end-to-end generation, restart persistence, health and shutdown checks.**
+6. Windows packaging and smoke test: launch `pivotra.exe`, hit `/health`, shut it down. **Complete: the built executable passed runtime imports, end-to-end generation, restart persistence, health and shutdown checks.**
 
 Steps 4–6 are implemented. Native Power BI Desktop validation remains pending and is separate from JSON schema validation.
 
@@ -47,7 +47,7 @@ Profiles include dense table bounds, blank rows/columns, merged regions, row num
 
 ## Deployment and storage contract (steps 5–6)
 
-- Portable Windows **one-folder** PyInstaller distribution: one `sheetforge.exe` entry point plus its accompanying runtime folder. Users keep that folder together; there is no installer, admin requirement, external database, or separate Python installation.
+- Portable Windows **one-folder** PyInstaller distribution: one `pivotra.exe` entry point plus its accompanying runtime folder. Users keep that folder together; there is no installer, admin requirement, external database, or separate Python installation.
 - The executable starts a loopback-only server on a free port, opens the browser, and provides console commands **open UI** and **quit** (or a tray equivalent).
 - SQLAlchemy + SQLite at `%LOCALAPPDATA%\SheetForge\sheetforge.db`, initialized/upgraded by Alembic. `projects(id, name, source_path, created_at)`, `runs(id, project_id, cleaning_plan_json, model_plan_json, steps_json, output_path, status, created_at)`, and `settings(key, value)` contain paths/plans/settings only. **Spreadsheet values, original workbook bytes, samples, profiles containing values, and cleaned data must never enter SQLite.**
 - Working artifacts (cleaned Parquet, generated PBIP, ZIPs) live under `%LOCALAPPDATA%\SheetForge\projects\<project_id>\`.
@@ -67,7 +67,7 @@ Validation: 62 tests pass, including a complete offline upload → plan → appl
 
 ## Run on Windows
 
-Extract the entire `sheetforge-windows-x64.zip` into a writable folder and double-click `sheetforge\sheetforge.exe`. Keep `sheetforge.exe` and `_internal` together. No Python installation, installer, administrator rights, database server, or manual database creation is needed. The browser opens the local UI at the free `http://127.0.0.1:<port>` address printed in the console. Type `open UI` to reopen it or `quit` to stop. Closing a browser tab leaves the server running. A second launch opens the existing instance.
+Extract the entire `pivotra-windows-x64.zip` into a writable folder and double-click `pivotra\pivotra.exe`. Keep `pivotra.exe` and `_internal` together. No Python installation, installer, administrator rights, database server, or manual database creation is needed. The browser opens the local UI at the free `http://127.0.0.1:<port>` address printed in the console. Type `open UI` to reopen it or `quit` to stop. Closing a browser tab leaves the server running. A second launch opens the existing instance.
 
 Projects and settings survive app upgrades because they live in `%LOCALAPPDATA%\SheetForge`, outside the portable application folder. Back up that whole data folder together with any original workbooks selected by path. Browser uploads retain their own managed source copy; keep it in place so Power BI Refresh can read it. No-AI mode is selected on first run and needs no network connection. Selecting a cloud provider explicitly enables sample/statistics requests. Ollama model discovery happens only when selected.
 
@@ -83,15 +83,35 @@ Build and test the portable Windows distribution:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 # Repeat just the executable smoke test:
-.venv\Scripts\python scripts/smoke_exe.py dist/sheetforge/sheetforge.exe
+.venv\Scripts\python scripts/smoke_exe.py dist/pivotra/pivotra.exe
 ```
 
 The build uses PyInstaller one-folder mode and pinned `uv.lock` dependencies. The smoke test runs the packaged provider imports, launches on a free loopback port, checks `/health`, uploads a fixture, plans/cleans/models/generates/downloads a PBIP, stops gracefully, restarts with the same database, verifies saved previews/downloads, and stops again. Its isolated temporary `SHEETFORGE_HOME` does not touch your real project storage.
 
-Browser verification used the existing Microsoft Edge/Playwright installation: upload, cleaning/modeling, export/download, reload, no-AI settings connection, desktop/mobile layout, and JavaScript error checks all passed. This browser tooling is not an application dependency. The automated suite has 64 passing tests, and ruff passes.
+Browser verification used the existing Microsoft Edge/Playwright installation: upload, cleaning/modeling, export/download, reload, no-AI settings connection, desktop/mobile layout, and JavaScript error checks all passed. This browser tooling is not an application dependency. The automated suite has 70 passing tests, and ruff passes.
 
-Native Power BI Desktop execution of generated TMDL/M and visual rendering still needs a manual check on a machine with Desktop: extract a generated project, open `SheetForge.pbip`, Refresh, inspect all report pages/measures/relationships, then edit a source numeric value and Refresh again. Local JSON schema validation does not establish native Desktop compatibility. Live cloud-provider requests have not been tested with real API keys.
+Native Power BI Desktop execution of generated TMDL/M and visual rendering still needs a manual check on a machine with Desktop: extract a generated project, open `Pivotra.pbip`, Refresh, inspect all report pages/measures/relationships, then edit a source numeric value and Refresh again. Local JSON schema validation does not establish native Desktop compatibility. Live cloud-provider requests have not been tested with real API keys.
 
 Executable verification: the Windows x64 PyInstaller one-folder build passed `scripts/smoke_exe.py`, including provider SDK/vault imports, launch, health, full no-AI workflow, generated ZIP checks, restart persistence, and graceful shutdown. Browser checks were also repeated against the packaged executable.
 
 A boundary regression test covers a full-width worksheet with 256 numeric columns: no-AI modeling emits all 256 sum measures plus the record count. The measure contract accommodates all 32 supported tables at this width.
+
+## Pivotra brand
+
+The app, exported Power BI projects, downloads, and portable Windows launcher use the Pivotra name. The vector logo combines a deep violet rounded square, circular frame, white table cells and violet/amber chart bars. The same geometry supplies the multi-resolution Windows icon.
+
+Existing storage and credential identifiers remain compatible: data stays under `%LOCALAPPDATA%\SheetForge`, the Python package/CLI remains `sheetforge`, and saved API keys continue using the existing Windows Credential Manager service.
+
+## Pivotra builder interface
+
+The Power BI builder uses a centered, sidebar-free layout with locally bundled Inter, a floating pill navigation bar, violet/amber branding, light and dark themes, a drop zone, and four real messy-workbook examples. The original NV-A/Pears app is unchanged. The builder opens the selected saved project on refresh; all other projects remain available through Saved projects.
+
+Select a file and click Build Power BI project to run the complete cleaning/model/report pipeline. Before/after previews are followed by the four KPI cards (Usable rows, Total spend, Total usage, Average utilization). KPI values use the complete cleaned data, not preview samples. Missing measures or unavailable prior weeks are shown explicitly. Weekly deltas compare the most recent data week against the preceding Monday-based week; tooltips disclose that the latest week may be partial.
+
+Cleaning steps can be edited and re-run; the advanced JSON editors, model settings, all providers, source-path input, audit trail, saved runs and PBIP export remain available. Generated projects are preserved when re-running. The cleaned Excel download contains styled tables, editable charts for up to the first three numeric columns per table (first 30 records), and a transformation audit. Power BI downloads are complete ZIPs: extract the whole folder and open Pivotra.pbip.
+
+CSV uploads must be UTF-8 and are converted into a managed local XLSX so the existing native Excel-based Power BI refresh pipeline works. Refresh reads that managed workbook; re-import after changing the original CSV. Excel formulas from CSV text are preserved as literal text. Files are limited to 8 MB.
+
+Privacy is enforced by the backend: Local only prevents cloud planning (local Ollama is allowed); Masked sample replaces sample cell values with typed placeholders while sharing headers/statistics; Full sample shares the bounded first 20/last 5 rows and statistics, never a whole workbook. No-AI is the initial provider. Choosing Auto-detect Ollama explicitly requests local discovery. Selecting a cloud provider opens settings for a model ID and key. Model connection tests send no spreadsheet data.
+
+Inter is bundled from the Google Fonts Inter distribution under its SIL Open Font License; the license is included at sheetforge/web/fonts/OFL.txt. No fonts, scripts, or styles are loaded from external services at runtime.

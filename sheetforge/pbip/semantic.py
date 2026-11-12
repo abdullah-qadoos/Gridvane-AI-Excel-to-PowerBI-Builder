@@ -28,9 +28,9 @@ def build_semantic_project(result, out, model_plan=None):
     zipped = out.with_suffix(".zip")
     if out.exists() or zipped.exists():
         raise ValueError("Output folder or ZIP already exists; choose a new output path.")
-    rd, md = "SheetForge.Report", "SheetForge.SemanticModel"
+    rd, md = "Pivotra.Report", "Pivotra.SemanticModel"
     documents = {
-        "SheetForge.pbip": {
+        "Pivotra.pbip": {
             "$schema": SCHEMA + "pbip/pbipProperties/1.0.0/schema.json",
             "version": "1.0",
             "artifacts": [{"report": {"path": rd}}],
@@ -53,7 +53,7 @@ def build_semantic_project(result, out, model_plan=None):
             "$schema": SCHEMA + "item/report/definition/report/3.0.0/schema.json",
             "themeCollection": {
                 "customTheme": {
-                    "name": "SheetForge",
+                    "name": "Pivotra",
                     "type": "RegisteredResources",
                     "reportVersionAtImport": {
                         "visual": "1.8.0",
@@ -66,23 +66,21 @@ def build_semantic_project(result, out, model_plan=None):
                 {
                     "name": "RegisteredResources",
                     "type": "RegisteredResources",
-                    "items": [
-                        {"name": "SheetForge", "path": "SheetForge.json", "type": "CustomTheme"}
-                    ],
+                    "items": [{"name": "Pivotra", "path": "Pivotra.json", "type": "CustomTheme"}],
                 }
             ],
         },
-        rd + "/StaticResources/RegisteredResources/SheetForge.json": {
-            "name": "SheetForge",
-            "dataColors": ["#37724E", "#88AC68", "#173D2B", "#B37C33"],
+        rd + "/StaticResources/RegisteredResources/Pivotra.json": {
+            "name": "Pivotra",
+            "dataColors": ["#6D5DF6", "#B8862B", "#39305F", "#B9AEFA"],
             "background": "#FFFFFF",
-            "foreground": "#20372A",
-            "tableAccent": "#37724E",
+            "foreground": "#24212F",
+            "tableAccent": "#6D5DF6",
             "textClasses": {
-                "title": {"fontFace": "Segoe UI Semibold", "fontSize": 14, "color": "#173D2B"},
-                "label": {"fontFace": "Segoe UI", "fontSize": 11, "color": "#526455"},
-                "callout": {"fontFace": "Segoe UI Semibold", "fontSize": 32, "color": "#173D2B"},
-                "header": {"fontFace": "Segoe UI Semibold", "fontSize": 12, "color": "#173D2B"},
+                "title": {"fontFace": "Segoe UI Semibold", "fontSize": 14, "color": "#39305F"},
+                "label": {"fontFace": "Segoe UI", "fontSize": 11, "color": "#716B80"},
+                "callout": {"fontFace": "Segoe UI Semibold", "fontSize": 32, "color": "#39305F"},
+                "header": {"fontFace": "Segoe UI Semibold", "fontSize": 12, "color": "#39305F"},
             },
         },
     }
@@ -102,7 +100,7 @@ def build_semantic_project(result, out, model_plan=None):
             name, frame, query, helper, [item for item in plan.measures if item.table == name]
         )
         text[f"{md}/definition/tables/Table{index:03d}.tmdl"] = (
-            content + f"\tannotation SheetForge_Role = {role.role}\n"
+            content + f"\tannotation Pivotra_Role = {role.role}\n"
         )
         references.append("\tref table " + identifier(name))
     text[md + "/definition/model.tmdl"] = (
@@ -200,7 +198,7 @@ def build_semantic_project(result, out, model_plan=None):
         },
     }
     text["OPEN_IN_DESKTOP.txt"] = (
-        "Open SheetForge.pbip and select Refresh. The model reads the original XLSX at:\n"
+        "Open Pivotra.pbip and select Refresh. The model reads the original XLSX at:\n"
         + str(result.source)
         + "\n\nKeep this file in place. For moved sources, edit File.Contents in Power Query. Source value edits and appended records in the last table can refresh. Structural changes require regenerating the plans.\n\nRelationships are many-to-one, one-direction, with checked unique parent keys and complete coverage at generation time. Inspect model_plan.json and steps.json. Native Desktop/TMDL/M execution remains unverified here.\n"
     )
@@ -224,4 +222,4 @@ def build_semantic_project(result, out, model_plan=None):
         for path in sorted(out.rglob("*")):
             if path.is_file():
                 archive.write(path, str(Path(out.name) / path.relative_to(out)))
-    return public_out / "SheetForge.pbip", public_zip
+    return public_out / "Pivotra.pbip", public_zip

@@ -23,7 +23,7 @@ sheetforge = "sheetforge.cli:main"
 include = ["sheetforge*"]
 
 [tool.setuptools.package-data]
-sheetforge = ["schemas/*.json", "schemas/*.md", "schemas/**/*.json", "schemas/**/*.md", "web/*", "storage/migrations/*.py", "storage/migrations/versions/*.py"]
+sheetforge = ["schemas/*.json", "schemas/*.md", "schemas/**/*.json", "schemas/**/*.md", "web/*", "web/fonts/*", "samples/*.xlsx", "storage/migrations/*.py", "storage/migrations/versions/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

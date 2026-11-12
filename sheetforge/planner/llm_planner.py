@@ -1,6 +1,7 @@
 """The planner sends profiles and bounded samples, never full workbook tables."""
 
 import json
+from copy import deepcopy
 
 from pydantic import model_validator
 
@@ -17,15 +18,33 @@ Use multi-row headers only when supported by merged-cell layout. Totals must not
 The supplied deterministic plan is a safe starting point. Do not emit Python, SQL, or rewritten data."""
 
 
-def plan_cleaning(profile, sheet_name=None):
+def plan_cleaning(profile, sheet_name=None, *, use_ai=True, privacy="sample"):
     fallback = heuristic_plan(profile, sheet_name)
-    if not enabled():
+    if not use_ai or not enabled():
         return fallback, ["No-AI mode: used deterministic layout and type heuristics."]
     sheets = [sheet_name] if sheet_name else list(profile.sheets)
     context = {
-        "sheets": [profile.llm_context(sheet) for sheet in sheets],
+        "sheets": [deepcopy(profile.llm_context(sheet)) for sheet in sheets],
         "heuristic_plan": fallback.model_dump(),
     }
+    if privacy == "masked":
+        names = {
+            name
+            for table in [fallback, *fallback.tables_split]
+            for name in [*table.column_types, *table.unpivot_columns, *table.column_renames]
+        }
+        for sheet in context["sheets"]:
+            for row in sheet["sample"]:
+                row["values"] = [
+                    value
+                    if isinstance(value, str) and value in names
+                    else None
+                    if value is None
+                    else 0
+                    if isinstance(value, (int, float))
+                    else "[masked]"
+                    for value in row["values"]
+                ]
 
     class SourceCleaningPlan(CleaningPlan):
         @model_validator(mode="after")

@@ -34,7 +34,7 @@ def test_each_fixture_can_generate_a_schema_valid_minimal_project(source, tmp_pa
     project, archive = build_project(result, tmp_path / "Project", selected)
     assert project.is_file()
     root = project.parent
-    model = root / "SheetForge.SemanticModel" / "definition"
+    model = root / "Pivotra.SemanticModel" / "definition"
     assert (model / "model.tmdl").is_file()
     assert (model / "relationships.tmdl").is_file()
     assert len(list((model / "tables").glob("*.tmdl"))) == 1
@@ -46,7 +46,7 @@ def test_each_fixture_can_generate_a_schema_valid_minimal_project(source, tmp_pa
     validation = json.loads((root / "validation.json").read_text(encoding="utf-8"))
     assert validation["pbir_json_schema"] == "passed"
     assert len(validation["validated_documents"]) == 10
-    visuals = list((root / "SheetForge.Report" / "definition" / "pages").rglob("visual.json"))
+    visuals = list((root / "Pivotra.Report" / "definition" / "pages").rglob("visual.json"))
     assert len(visuals) == 3
     assert {
         json.loads(path.read_text(encoding="utf-8"))["visual"]["visualType"] for path in visuals

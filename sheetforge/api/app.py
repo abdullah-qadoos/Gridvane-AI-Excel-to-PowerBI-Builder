@@ -1,11 +1,14 @@
 """Loopback desktop API. SQLite holds metadata; all workbook data stays in files."""
 
+import csv
 import hashlib
+import io
 import json
 import logging
 import secrets
 from pathlib import Path
 from threading import RLock
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 from xml.etree.ElementTree import ParseError
@@ -16,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from openpyxl import Workbook
 from openpyxl.utils.exceptions import InvalidFileException
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
@@ -31,6 +35,7 @@ from sheetforge.modeler import plan_model, validate_model
 from sheetforge.paths import data_home, resource_path
 from sheetforge.pbip import build_semantic_project
 from sheetforge.planner.llm_planner import plan_cleaning
+from sheetforge.presentation import clean_excel, kpis
 from sheetforge.profiler import profile_workbook
 from sheetforge.storage import Repository
 from sheetforge.transformer import TransformResult, apply_plan
@@ -44,6 +49,7 @@ class PlanRequest(Contract):
     run_id: str | None = None
     sheet: str | None = None
     cleaning_plan: dict | None = None
+    privacy: Literal["local", "masked", "sample"] = "local"
 
 
 class RunRequest(Contract):
@@ -53,6 +59,7 @@ class RunRequest(Contract):
 
 class ModelRequest(RunRequest):
     model_plan: dict | None = None
+    privacy: Literal["local", "masked", "sample"] = "local"
 
 
 def write_json(path, value):
@@ -79,7 +86,7 @@ def preview(frame, limit=30):
 def create_app(home=None, shutdown=None):
     home = Path(home or data_home()).resolve()
     repo = Repository(home)
-    app = FastAPI(title="SheetForge", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Pivotra", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.repository = repo
     app.state.csrf_token = secrets.token_urlsafe(32)
     app.state.pipeline_lock = RLock()
@@ -105,7 +112,7 @@ def create_app(home=None, shutdown=None):
         if protected and not secrets.compare_digest(
             request.headers.get("x-sheetforge-token", ""), app.state.csrf_token
         ):
-            return JSONResponse({"detail": "Reload SheetForge before continuing."}, status_code=403)
+            return JSONResponse({"detail": "Reload Pivotra before continuing."}, status_code=403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Cache-Control"] = "no-store"
@@ -244,9 +251,29 @@ def create_app(home=None, shutdown=None):
             directory = home / "projects" / project_id
             directory.mkdir(parents=True)
             source = original or directory / "source.xlsx"
-            if content is not None:
-                source.write_bytes(content)
             try:
+                if content is not None:
+                    if Path(name).suffix.lower() == ".csv":
+                        text = content.decode("utf-8-sig")
+                        try:
+                            dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
+                        except csv.Error:
+                            dialect = csv.excel
+                        book = Workbook()
+                        try:
+                            for index, row in enumerate(csv.reader(io.StringIO(text), dialect)):
+                                if index >= 100_000 or len(row) > 256:
+                                    raise ValueError(
+                                        "Use CSV files with at most 100,000 rows and 256 columns."
+                                    )
+                                book.active.append(row)
+                                for cell in book.active[book.active.max_row]:
+                                    cell.data_type = "s"
+                            book.save(source)
+                        finally:
+                            book.close()
+                    else:
+                        source.write_bytes(content)
                 profile = profile_workbook(source)
                 if not any(sheet["blocks"] for sheet in profile.sheets.values()):
                     raise ValueError(
@@ -281,8 +308,8 @@ def create_app(home=None, shutdown=None):
             ):
                 raise ValueError("Select an existing .xlsx file under 8 MB.")
             return await run_in_threadpool(import_source, original.name, None, original)
-        if Path(filename).suffix.lower() != ".xlsx" or len(filename) > 255:
-            raise ValueError("Upload an .xlsx workbook.")
+        if Path(filename).suffix.lower() not in {".xlsx", ".csv"} or len(filename) > 255:
+            raise ValueError("Upload an .xlsx workbook or UTF-8 CSV.")
         chunks, size = [], 0
         async for chunk in request.stream():
             size += len(chunk)
@@ -315,7 +342,12 @@ def create_app(home=None, shutdown=None):
                     notes = ["Used the explicitly reviewed cleaning plan."]
                 else:
                     register_secret(resolve_api_key(app.state.llm_config))
-                    cleaning, notes = plan_cleaning(profile, body.sheet)
+                    cleaning, notes = plan_cleaning(
+                        profile,
+                        body.sheet,
+                        use_ai=body.privacy != "local" or app.state.llm_config.provider == "ollama",
+                        privacy=body.privacy,
+                    )
                 write_json(
                     run_dir(item) / "source.json", {"sha256": source_digest(owner["source_path"])}
                 )
@@ -366,6 +398,7 @@ def create_app(home=None, shutdown=None):
                     "tables": {name: preview(frame) for name, frame in result.tables.items()},
                     "steps": [step.model_dump() for step in result.steps],
                     "warnings": result.warnings,
+                    "kpis": kpis(result.tables),
                 }
             except Exception:
                 repo.update_run(item["id"], status="failed")
@@ -383,6 +416,7 @@ def create_app(home=None, shutdown=None):
             "tables": {name: preview(frame) for name, frame in result.tables.items()},
             "steps": [step.model_dump() for step in result.steps],
             "warnings": result.warnings,
+            "kpis": kpis(result.tables),
         }
 
     @app.post("/model")
@@ -402,7 +436,10 @@ def create_app(home=None, shutdown=None):
                     )
                 else:
                     register_secret(resolve_api_key(app.state.llm_config))
-                    semantic, notes = plan_model(result.tables)
+                    semantic, notes = plan_model(
+                        result.tables,
+                        use_ai=body.privacy != "local" or app.state.llm_config.provider == "ollama",
+                    )
                 write_json(run_dir(item) / "model_notes.json", notes)
                 item = repo.update_run(
                     item["id"], status="modeled", model_plan_json=semantic.model_dump_json()
@@ -444,7 +481,32 @@ def create_app(home=None, shutdown=None):
             or not path.is_file()
         ):
             raise HTTPException(404, "Generated project file is unavailable.")
-        return FileResponse(path, filename="SheetForge-powerbi.zip", media_type="application/zip")
+        return FileResponse(path, filename="Pivotra-powerbi.zip", media_type="application/zip")
+
+    @app.get("/download/excel")
+    def download_excel(run_id: str):
+        with app.state.pipeline_lock:
+            item = repo.run(run_id)
+            if not item or item["status"] not in {"applied", "modeled", "generated"}:
+                raise HTTPException(409, "Clean a workbook first.")
+            target = clean_excel(load_result(item), run_dir(item) / "Pivotra-cleaned.xlsx")
+            return FileResponse(
+                target,
+                filename="Pivotra-cleaned.xlsx",
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+    @app.get("/samples/{name}")
+    def sample(name: str):
+        samples = {
+            "transposed": "transposed.xlsx",
+            "monthly": "wide_months.xlsx",
+            "multiple": "two_tables.xlsx",
+            "merged": "merged_headers.xlsx",
+        }
+        if name not in samples:
+            raise HTTPException(404, "Sample not found.")
+        return FileResponse(resource_path("samples", samples[name]), filename=samples[name])
 
     @app.get("/settings")
     def get_settings():
