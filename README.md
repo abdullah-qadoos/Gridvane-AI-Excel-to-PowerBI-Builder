@@ -56,3 +56,11 @@ Profiles include dense table bounds, blank rows/columns, merged regions, row num
 - `scripts/build.ps1` will bundle local PBIR/TMDL schema resources. Step 6 includes the executable `/health` smoke test and controlled shutdown.
 
 SQLAlchemy, Alembic, PyInstaller, and ruff were explicitly requested. Additional uvicorn, pyarrow, and jsonschema dependencies were explicitly approved. No other direct application dependency is to be added without approval.
+
+## Desktop API and web UI (step 5)
+
+The local interface supports raw `.xlsx` uploads or an original local source path, before/after previews, editable cleaning/model JSON, human-readable transformation steps, saved run history, provider settings, and PBIP ZIP downloads. Uploads retain a managed workbook copy as the refresh source; selecting a local path keeps that original workbook as the refresh source. No external assets are used.
+
+SQLAlchemy creates the SQLite database and Alembic applies migrations on first launch. Profile samples, workbook bytes and cleaned Parquet are files beneath the project directory, never database records. Interrupted operations are marked on restart. Earlier generated runs are preserved when a plan changes. Source changes between planning and generation require a new plan. The loopback API uses an instance token and same-origin checks.
+
+Validation: 62 tests pass, including a complete offline upload ? plan ? apply ? model ? generate ? download cycle, persistence across restart, metadata-only database checks, rejected cross-origin requests, malformed uploads, changed sources, reviewed plan validation, and secret redaction. Windows extended paths handle nested PBIR folders without changing system registry settings.

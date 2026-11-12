@@ -1,6 +1,7 @@
 """Multi-table TMDL, verified relationships, measures, and native report pages."""
 
 import json
+import os
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -203,6 +204,11 @@ def build_semantic_project(result, out, model_plan=None):
         + str(result.source)
         + "\n\nKeep this file in place. For moved sources, edit File.Contents in Power Query. Source value edits and appended records in the last table can refresh. Structural changes require regenerating the plans.\n\nRelationships are many-to-one, one-direction, with checked unique parent keys and complete coverage at generation time. Inspect model_plan.json and steps.json. Native Desktop/TMDL/M execution remains unverified here.\n"
     )
+    # Extended Windows paths keep nested PBIR files usable without admin registry edits.
+    public_out, public_zip = out, zipped
+    if os.name == "nt" and not str(out).startswith("\\\\?\\"):
+        out = Path("\\\\?\\" + str(out))
+        zipped = Path("\\\\?\\" + str(zipped))
     out.mkdir(parents=True)
     for relative, document in documents.items():
         path = out / relative
@@ -218,4 +224,4 @@ def build_semantic_project(result, out, model_plan=None):
         for path in sorted(out.rglob("*")):
             if path.is_file():
                 archive.write(path, str(Path(out.name) / path.relative_to(out)))
-    return out / "SheetForge.pbip", zipped
+    return public_out / "SheetForge.pbip", public_zip

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="sheetforge-token" content="__SHEETFORGE_TOKEN__">
+  <meta name="theme-color" content="#173d2b"><title>SheetForge · Workbook studio</title>
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside><a class="brand" href="/"><img src="/static/mark.svg" width="40" height="40" alt=""><span>SheetForge<small>WORKBOOK STUDIO</small></span></a>
+    <div class="sidebar-label">YOUR PROJECTS</div><div id="project-list"></div><p class="sidebar-note">Saved on this device.<br>Spreadsheet data stays in working files.</p>
+  </aside>
+  <main>
+    <header><span class="breadcrumb">Workspace / Workbook studio</span><div class="actions"><span id="mode" class="pill">No-AI · offline</span><button id="settings-open" class="secondary">Model settings</button><label class="button primary">Upload workbook<input id="upload" type="file" accept=".xlsx" aria-label="Upload Excel workbook"></label></div></header>
+    <div class="content">
+      <section class="intro"><div><span class="eyebrow">FROM MESSY WORKBOOK TO CLEAR REPORT</span><h1>Make your numbers usable.</h1><p>Review every decision. Clean with pandas. Build an editable Power BI project.</p></div></section>
+      <p id="notice" role="status" aria-live="polite" hidden></p>
+      <section id="empty" class="panel empty"><img src="/static/mark.svg" alt="" width="60" height="60"><h2>Start with an Excel workbook</h2><p>Upload an .xlsx file with up to 8 MB of data. Local analysis works without a model or an API key.</p><button id="choose-file" class="primary">Choose workbook</button>
+        <details><summary>Use an existing file path for Desktop Refresh</summary><form id="path-form"><label for="source-path">Full path to the original XLSX</label><input id="source-path" placeholder="C:\Documents\workbook.xlsx" required><button class="secondary">Open local workbook</button></form><small>This reads the original file in place. Browser uploads are retained as a managed source copy.</small></details>
+      </section>
+      <div id="workspace" hidden>
+        <section class="dataset panel"><div class="file-badge">XLSX</div><div><h2 id="project-name"></h2><p id="source-description"></p></div><span id="run-status" class="pill"></span></section>
+        <nav class="steps" aria-label="Workflow"><a href="#profile-panel"><b>1</b>Inspect</a><a href="#clean-panel"><b>2</b>Clean</a><a href="#model-panel"><b>3</b>Model</a><a href="#export-panel"><b>4</b>Export</a></nav>
+        <div class="grid">
+          <section id="profile-panel" class="panel"><div class="panel-head"><div><span class="eyebrow">BEFORE</span><h2>Workbook profile</h2></div><label>Sheet <select id="sheet"></select></label></div><div id="profile-stats" class="stats"></div><div id="before" class="table-wrap"></div></section>
+          <section id="clean-panel" class="panel"><div class="panel-head"><div><span class="eyebrow">REVIEW THE DECISIONS</span><h2>Cleaning plan</h2></div><button id="make-plan" class="secondary">Suggest plan</button></div><p class="helper">The plan controls headers, table bounds, transpose, unpivot, totals, and types. Edit JSON to override it.</p><label class="sr-only" for="cleaning-json">Cleaning plan JSON</label><textarea id="cleaning-json" spellcheck="false" placeholder="Suggest a plan, then review its JSON."></textarea><button id="apply-plan" class="primary" disabled>Apply reviewed plan</button></section>
+        </div>
+        <section class="panel after-panel"><div class="panel-head"><div><span class="eyebrow">AFTER</span><h2>Cleaned tables</h2></div><label>Table <select id="table-select"></select></label></div><div id="after-stats" class="stats"></div><div id="after" class="table-wrap"><p class="helper">Apply a cleaning plan to preview the result.</p></div><details><summary>Transformation audit</summary><ol id="audit"></ol></details><p id="warnings" class="helper"></p></section>
+        <div class="grid">
+          <section id="model-panel" class="panel"><div class="panel-head"><div><span class="eyebrow">A MODEL YOU CAN INSPECT</span><h2>Measures &amp; report pages</h2></div><button id="make-model" class="secondary" disabled>Suggest model</button></div><p class="helper">Review table roles, relationships, DAX measures, and native visual choices. No-AI mode uses verified heuristics.</p><label class="sr-only" for="model-json">Semantic model JSON</label><textarea id="model-json" spellcheck="false" placeholder="Clean your tables to suggest a model."></textarea><button id="review-model" class="secondary" disabled>Validate edited model</button></section>
+          <section id="export-panel" class="panel export"><span class="eyebrow">READY FOR POWER BI DESKTOP</span><h2>Your workbook, represented.</h2><p>Download a complete PBIP folder with editable native charts, measures, and a refreshable connection to the source workbook.</p><button id="generate" class="primary" disabled>Generate Power BI project</button><button id="download" class="secondary" disabled>Download project ZIP ↓</button><small>Extract the whole ZIP, open SheetForge.pbip, then select Refresh in Power BI Desktop. Native Desktop compatibility is awaiting verification.</small><label for="run-select">Saved runs</label><select id="run-select"></select></section>
+        </div>
+      </div>
+    </div>
+  </main>
+  <dialog id="settings"><form method="dialog" class="dialog-head"><h2>Model settings</h2><button class="secondary">Close</button></form><p class="helper">Optional. The default no-AI mode runs fully offline. Keys are saved in Windows Credential Manager.</p>
+    <form id="settings-form"><label for="provider">Provider</label><select id="provider"><option value="none">No-AI · offline</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option><option value="azure">Azure</option><option value="openrouter">OpenRouter</option><option value="ollama">Ollama · local</option></select>
+      <label for="model-id">Model / deployment ID</label><input id="model-id" list="ollama-models" autocomplete="off"><datalist id="ollama-models"></datalist><p id="ollama-status" class="helper"></p>
+      <label for="base-url">Base URL (optional)</label><input id="base-url" type="url" placeholder="https://provider.example/v1"><label for="api-version">Azure API version (optional)</label><input id="api-version">
+      <label for="api-key">API key</label><input id="api-key" type="password" autocomplete="off" placeholder="Leave blank to reuse a saved key"><div class="actions"><button class="primary">Save settings</button><button id="test-model" type="button" class="secondary">Test saved connection</button></div>
+    </form><p id="settings-notice" role="status" class="helper"></p>
+  </dialog>
+</body></html>
