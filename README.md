@@ -8,10 +8,10 @@ Python 3.11 · pandas transforms data · validated JSON plans explain decisions 
 2. Provider-neutral LiteLLM abstraction, strict LLM planning with one retry and deterministic fallback, credential storage, mocked tests. **Complete: 27 tests pass.**
 3. Minimal refreshable TMDL/PBIR project: one table, one page, card + bar + table. **Generated and JSON-validated; stopped for the user's Power BI Desktop feedback. 44 tests pass.**
 4. Semantic modeler, verified relationships, and multiple report pages. **Complete: 53 tests pass.**
-5. FastAPI and minimal UI: upload, before/after previews, plan overrides, model, generate, download, and settings.
-6. Windows packaging and smoke test: launch `sheetforge.exe`, hit `/health`, shut it down.
+5. FastAPI and minimal UI: upload, before/after previews, plan overrides, model, generate, download, and settings. **Complete: 62 tests pass.**
+6. Windows packaging and smoke test: launch `sheetforge.exe`, hit `/health`, shut it down. **Complete: the built executable passed runtime imports, end-to-end generation, restart persistence, health and shutdown checks.**
 
-Implementation continues through steps 4–6 at the user’s request. Native Power BI Desktop validation remains pending and is separate from JSON schema validation.
+Steps 4–6 are implemented. Native Power BI Desktop validation remains pending and is separate from JSON schema validation.
 
 ## Development
 
@@ -53,7 +53,7 @@ Profiles include dense table bounds, blank rows/columns, merged regions, row num
 - Working artifacts (cleaned Parquet, generated PBIP, ZIPs) live under `%LOCALAPPDATA%\SheetForge\projects\<project_id>\`.
 - Keys live in Windows Credential Manager through keyring; environment/`.env` fallback is for local development. Keys never enter SQLite, logs, exported projects, or Git.
 - Rotating logs live in `%LOCALAPPDATA%\SheetForge\logs\`. No-AI mode makes no network calls. Ollama discovery is explicit and local at `localhost:11434`.
-- `scripts/build.ps1` will bundle local PBIR/TMDL schema resources. Step 6 includes the executable `/health` smoke test and controlled shutdown.
+- `scripts/build.ps1` bundles local PBIR/TMDL schema resources and Alembic migrations. Step 6 includes the executable `/health` smoke test and controlled shutdown.
 
 SQLAlchemy, Alembic, PyInstaller, and ruff were explicitly requested. Additional uvicorn, pyarrow, and jsonschema dependencies were explicitly approved. No other direct application dependency is to be added without approval.
 
@@ -63,4 +63,35 @@ The local interface supports raw `.xlsx` uploads or an original local source pat
 
 SQLAlchemy creates the SQLite database and Alembic applies migrations on first launch. Profile samples, workbook bytes and cleaned Parquet are files beneath the project directory, never database records. Interrupted operations are marked on restart. Earlier generated runs are preserved when a plan changes. Source changes between planning and generation require a new plan. The loopback API uses an instance token and same-origin checks.
 
-Validation: 62 tests pass, including a complete offline upload ? plan ? apply ? model ? generate ? download cycle, persistence across restart, metadata-only database checks, rejected cross-origin requests, malformed uploads, changed sources, reviewed plan validation, and secret redaction. Windows extended paths handle nested PBIR folders without changing system registry settings.
+Validation: 62 tests pass, including a complete offline upload → plan → apply → model → generate → download cycle, persistence across restart, metadata-only database checks, rejected cross-origin requests, malformed uploads, changed sources, reviewed plan validation, and secret redaction. Windows extended paths handle nested PBIR folders without changing system registry settings.
+
+## Run on Windows
+
+Extract the entire `sheetforge-windows-x64.zip` into a writable folder and double-click `sheetforge\sheetforge.exe`. Keep `sheetforge.exe` and `_internal` together. No Python installation, installer, administrator rights, database server, or manual database creation is needed. The browser opens the local UI at the free `http://127.0.0.1:<port>` address printed in the console. Type `open UI` to reopen it or `quit` to stop. Closing a browser tab leaves the server running. A second launch opens the existing instance.
+
+Projects and settings survive app upgrades because they live in `%LOCALAPPDATA%\SheetForge`, outside the portable application folder. Back up that whole data folder together with any original workbooks selected by path. Browser uploads retain their own managed source copy; keep it in place so Power BI Refresh can read it. No-AI mode is selected on first run and needs no network connection. Selecting a cloud provider explicitly enables sample/statistics requests. Ollama model discovery happens only when selected.
+
+From source, Python 3.11 is required:
+
+```powershell
+python -m uv sync --python 3.11 --extra app --extra llm --extra dev
+.venv\Scripts\sheetforge serve
+```
+
+Build and test the portable Windows distribution:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build.ps1
+# Repeat just the executable smoke test:
+.venv\Scripts\python scripts/smoke_exe.py dist/sheetforge/sheetforge.exe
+```
+
+The build uses PyInstaller one-folder mode and pinned `uv.lock` dependencies. The smoke test runs the packaged provider imports, launches on a free loopback port, checks `/health`, uploads a fixture, plans/cleans/models/generates/downloads a PBIP, stops gracefully, restarts with the same database, verifies saved previews/downloads, and stops again. Its isolated temporary `SHEETFORGE_HOME` does not touch your real project storage.
+
+Browser verification used the existing Microsoft Edge/Playwright installation: upload, cleaning/modeling, export/download, reload, no-AI settings connection, desktop/mobile layout, and JavaScript error checks all passed. This browser tooling is not an application dependency. The automated suite has 64 passing tests, and ruff passes.
+
+Native Power BI Desktop execution of generated TMDL/M and visual rendering still needs a manual check on a machine with Desktop: extract a generated project, open `SheetForge.pbip`, Refresh, inspect all report pages/measures/relationships, then edit a source numeric value and Refresh again. Local JSON schema validation does not establish native Desktop compatibility. Live cloud-provider requests have not been tested with real API keys.
+
+Executable verification: the Windows x64 PyInstaller one-folder build passed `scripts/smoke_exe.py`, including provider SDK/vault imports, launch, health, full no-AI workflow, generated ZIP checks, restart persistence, and graceful shutdown. Browser checks were also repeated against the packaged executable.
+
+A boundary regression test covers a full-width worksheet with 256 numeric columns: no-AI modeling emits all 256 sum measures plus the record count. The measure contract accommodates all 32 supported tables at this width.

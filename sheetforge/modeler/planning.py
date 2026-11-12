@@ -48,7 +48,8 @@ class ReportPage(Contract):
 class SemanticModelPlan(Contract):
     tables: list[TableRole] = Field(min_length=1, max_length=32)
     relationships: list[Relationship] = Field(default_factory=list, max_length=32)
-    measures: list[Measure] = Field(min_length=1, max_length=256)
+    # Each of 32 supported tables can have 256 numeric columns plus a row count.
+    measures: list[Measure] = Field(min_length=1, max_length=32 * 257)
     pages: list[ReportPage] = Field(min_length=1, max_length=33)
 
 

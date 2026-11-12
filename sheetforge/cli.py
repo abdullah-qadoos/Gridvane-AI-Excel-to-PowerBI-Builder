@@ -7,6 +7,13 @@ from sheetforge.transformer import apply_plan
 
 
 def main(argv=None):
+    import sys
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "serve":
+        from sheetforge.desktop import main as serve
+
+        return serve(arguments[1:])
     parser = argparse.ArgumentParser(prog="sheetforge")
     commands = parser.add_subparsers(dest="command", required=True)
     fix = commands.add_parser(

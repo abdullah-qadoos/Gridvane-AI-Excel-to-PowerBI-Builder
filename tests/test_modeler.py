@@ -46,6 +46,14 @@ def test_heuristics_create_verified_relationship_and_multiple_pages():
     assert "SECRET_A" not in json.dumps(schema_context(star()))
 
 
+def test_offline_model_supports_maximum_numeric_worksheet_width():
+    tables = {"Wide": pd.DataFrame({f"Metric {i}": [i, i + 1] for i in range(256)})}
+    plan, _ = plan_model(tables)
+    assert len(plan.measures) == 257
+    assert sum(measure.dax.startswith("SUM(") for measure in plan.measures) == 256
+    assert validate_model(plan, tables) == plan
+
+
 @pytest.mark.parametrize(
     "change",
     ["missing_column", "duplicate_parent", "missing_parent", "unsafe_dax", "cycle", "bad_visual"],
