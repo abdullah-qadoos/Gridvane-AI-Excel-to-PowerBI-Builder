@@ -18,8 +18,8 @@ Use multi-row headers only when supported by merged-cell layout. Totals must not
 The supplied deterministic plan is a safe starting point. Do not emit Python, SQL, or rewritten data."""
 
 
-def plan_cleaning(profile, sheet_name=None, *, use_ai=True, privacy="sample"):
-    fallback = heuristic_plan(profile, sheet_name)
+def plan_cleaning(profile, sheet_name=None, *, use_ai=True, privacy="sample", title=None):
+    fallback = heuristic_plan(profile, sheet_name, title=title)
     if not use_ai or not enabled():
         return fallback, ["No-AI mode: used deterministic layout and type heuristics."]
     sheets = [sheet_name] if sheet_name else list(profile.sheets)

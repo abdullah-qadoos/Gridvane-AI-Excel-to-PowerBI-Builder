@@ -5,14 +5,15 @@ import hashlib
 import io
 import json
 import logging
+import os
 import secrets
 from pathlib import Path
 from threading import RLock
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from uuid import UUID, uuid4
 from xml.etree.ElementTree import ParseError
-from zipfile import BadZipFile
+from zipfile import BadZipFile, ZipFile
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
@@ -26,19 +27,20 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from sheetforge import quality
 from sheetforge.contracts import AppliedStep, CleaningPlan, Contract
 from sheetforge.llm import LLMConfig, configure, discover_ollama, public_config, store_api_key
 from sheetforge.llm import test_connection as check_connection
 from sheetforge.llm.config import resolve_api_key
 from sheetforge.logging_setup import register_secret
 from sheetforge.modeler import plan_model, validate_model
-from sheetforge.paths import data_home, resource_path
+from sheetforge.paths import data_home, output_stem, resource_path
 from sheetforge.pbip import build_semantic_project
 from sheetforge.planner.llm_planner import plan_cleaning
 from sheetforge.presentation import clean_excel, kpis
 from sheetforge.profiler import profile_workbook
 from sheetforge.storage import Repository
-from sheetforge.transformer import TransformResult, apply_plan
+from sheetforge.transformer import TransformResult, apply_plan, cast_table
 
 MAX_UPLOAD = 8 * 1024 * 1024
 LOG = logging.getLogger("sheetforge.api")
@@ -55,6 +57,18 @@ class PlanRequest(Contract):
 class RunRequest(Contract):
     project_id: str
     run_id: str
+
+
+class QualityInspectRequest(RunRequest):
+    privacy: Literal["local", "masked", "sample"] = "local"
+
+
+class QualityRequest(RunRequest):
+    decisions: dict[str, dict[str, dict]] = {}
+
+
+QUALITY_READY = {"applied", "checked", "needs_fix", "modeled", "generated"}
+CLEANED = QUALITY_READY
 
 
 class ModelRequest(RunRequest):
@@ -236,6 +250,30 @@ def create_app(home=None, shutdown=None):
                 409, "The source workbook changed. Create a new plan before continuing."
             )
 
+    def source_name(item):
+        return project(item["project_id"])["name"]
+
+    def download_name(item, suffix):
+        return output_stem(source_name(item)) + suffix
+
+    def save_tables(item, result):
+        location = run_dir(item)
+        manifest = []
+        for index, (name, frame) in enumerate(result.tables.items(), 1):
+            file = f"cleaned_{index:03d}.parquet"
+            frame.to_parquet(location / file, index=False, engine="pyarrow")
+            manifest.append({"name": name, "file": file})
+        write_json(location / "cleaned.json", {"tables": manifest, "warnings": result.warnings})
+
+    def result_payload(item, result):
+        return {
+            "run": item,
+            "tables": {name: preview(frame) for name, frame in result.tables.items()},
+            "steps": [step.model_dump() for step in result.steps],
+            "warnings": result.warnings,
+            "kpis": kpis(result.tables),
+        }
+
     @app.get("/projects")
     def projects():
         return {"projects": repo.projects()}
@@ -347,6 +385,7 @@ def create_app(home=None, shutdown=None):
                         body.sheet,
                         use_ai=body.privacy != "local" or app.state.llm_config.provider == "ollama",
                         privacy=body.privacy,
+                        title=owner["name"],
                     )
                 write_json(
                     run_dir(item) / "source.json", {"sha256": source_digest(owner["source_path"])}
@@ -377,15 +416,9 @@ def create_app(home=None, shutdown=None):
                     owner["source_path"],
                     CleaningPlan.model_validate_json(item["cleaning_plan_json"]),
                 )
-                location = run_dir(item)
-                manifest = []
-                for index, (name, frame) in enumerate(result.tables.items(), 1):
-                    file = f"cleaned_{index:03d}.parquet"
-                    frame.to_parquet(location / file, index=False, engine="pyarrow")
-                    manifest.append({"name": name, "file": file})
-                write_json(
-                    location / "cleaned.json", {"tables": manifest, "warnings": result.warnings}
-                )
+                save_tables(item, result)
+                for stale in ["quality_report.json", "quality.json", "audit.json", "cleaned.xlsx"]:
+                    (run_dir(item) / stale).unlink(missing_ok=True)
                 item = repo.update_run(
                     item["id"],
                     status="applied",
@@ -393,13 +426,7 @@ def create_app(home=None, shutdown=None):
                     model_plan_json=None,
                     output_path=None,
                 )
-                return {
-                    "run": item,
-                    "tables": {name: preview(frame) for name, frame in result.tables.items()},
-                    "steps": [step.model_dump() for step in result.steps],
-                    "warnings": result.warnings,
-                    "kpis": kpis(result.tables),
-                }
+                return result_payload(item, result)
             except Exception:
                 repo.update_run(item["id"], status="failed")
                 raise
@@ -409,7 +436,7 @@ def create_app(home=None, shutdown=None):
         item = repo.run(run_id)
         if not item:
             raise HTTPException(404, "Run not found.")
-        if item["status"] not in {"applied", "modeled", "generated"}:
+        if item["status"] not in CLEANED:
             return {"tables": {}, "steps": [], "warnings": []}
         result = load_result(item)
         return {
@@ -419,12 +446,119 @@ def create_app(home=None, shutdown=None):
             "kpis": kpis(result.tables),
         }
 
+    def raw_tables(item, owner):
+        require_same_source(item, owner["source_path"])
+        return apply_plan(
+            owner["source_path"],
+            CleaningPlan.model_validate_json(item["cleaning_plan_json"]),
+            cast=False,
+        )
+
+    @app.post("/quality/inspect")
+    def quality_inspect(body: QualityInspectRequest):
+        with app.state.pipeline_lock:
+            item, owner = run_for(body), project(body.project_id)
+            if item["status"] not in QUALITY_READY:
+                raise HTTPException(409, "Apply a cleaning plan before the quality check.")
+            raw = raw_tables(item, owner)
+            use_ai = body.privacy != "local" or app.state.llm_config.provider == "ollama"
+            if use_ai:
+                register_secret(resolve_api_key(app.state.llm_config))
+            reports, notes = {}, []
+            for name, frame in raw.tables.items():
+                rules, note = quality.propose_rules(frame, raw.types[name], use_ai=use_ai)
+                report = quality.inspect(frame, raw.types[name], rules)
+                reports[name] = report.model_dump(mode="json")
+                notes.append(f"{name}: {note}")
+            write_json(run_dir(item) / "quality_report.json", {"report": reports, "notes": notes})
+            (run_dir(item) / "quality.json").unlink(missing_ok=True)
+            return {"run": item, "report": reports, "notes": notes}
+
+    @app.post("/quality")
+    def quality_apply(body: QualityRequest):
+        with app.state.pipeline_lock:
+            item, owner = run_for(body), project(body.project_id)
+            location = run_dir(item)
+            if (
+                item["status"] not in QUALITY_READY
+                or not (location / "quality_report.json").exists()
+            ):
+                raise HTTPException(409, "Run the quality check first.")
+            saved = read_json(location / "quality_report.json")
+            raw = raw_tables(item, owner)
+            if set(saved["report"]) != set(raw.tables):
+                raise HTTPException(409, "The tables changed. Run the quality check again.")
+            unknown = set(body.decisions) - set(raw.tables)
+            if unknown:
+                raise ValueError(
+                    "Decisions reference unknown tables: " + ", ".join(sorted(unknown))
+                )
+            # Validate every choice before touching run state: a missing choice is not a failed run.
+            result = TransformResult(
+                steps=list(raw.steps),
+                warnings=list(raw.warnings),
+                plan=raw.plan,
+                source=raw.source,
+                types=raw.types,
+            )
+            audits = {}
+            for name, frame in raw.tables.items():
+                report = quality.QualityReport.model_validate(saved["report"][name])
+                fixed, log = quality.apply(frame, body.decisions.get(name, {}), report)
+                result.tables[name] = cast_table(fixed, raw.types[name], name, result)
+                audits[name] = log.model_dump() | {"stopped": log.stopped}
+            stopped = any(audit["stopped"] for audit in audits.values())
+            repo.update_run(item["id"], status="checking")
+            try:
+                save_tables(item, result)
+                write_json(location / "audit.json", audits)
+                write_json(
+                    location / "quality.json",
+                    saved | {"decisions": body.decisions, "audit": audits},
+                )
+                clean_excel(result, location / "cleaned.xlsx", audits, owner["name"])
+                item = repo.update_run(
+                    item["id"],
+                    status="needs_fix" if stopped else "checked",
+                    steps_json=json.dumps([step.model_dump() for step in result.steps]),
+                    model_plan_json=None,
+                    output_path=None,
+                )
+                return result_payload(item, result) | {"stopped": stopped, "audit": audits}
+            except Exception:
+                repo.update_run(item["id"], status="failed")
+                raise
+
+    def saved_quality(run_id):
+        item = repo.run(run_id)
+        if not item:
+            raise HTTPException(404, "Run not found.")
+        for name in ["quality.json", "quality_report.json"]:
+            path = run_dir(item) / name
+            if path.exists():
+                return read_json(path)
+        return None
+
+    @app.get("/quality")
+    def get_quality(run_id: str):
+        return saved_quality(run_id) or {}
+
+    @app.get("/download/quality")
+    def download_quality(run_id: str):
+        saved = saved_quality(run_id)
+        if not saved:
+            raise HTTPException(404, "Run the quality check first.")
+        filename = download_name(repo.run(run_id), "-quality-report.json")
+        ascii_name = filename.encode("ascii", "replace").decode().replace("?", "_")
+        disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+        return JSONResponse(saved, headers={"Content-Disposition": disposition})
+
     @app.post("/model")
     def model(body: ModelRequest):
         with app.state.pipeline_lock:
             item = run_for(body)
-            if item["status"] not in {"applied", "modeled"}:
-                raise HTTPException(409, "Apply a cleaning plan before modeling.")
+            if item["status"] not in {"checked", "modeled"}:
+                raise HTTPException(409, "Finish the quality check before modeling.")
             result = load_result(item)
             require_same_source(item, result.source)
             repo.update_run(item["id"], status="modeling")
@@ -461,7 +595,7 @@ def create_app(home=None, shutdown=None):
             try:
                 output = run_dir(item) / ("powerbi-" + uuid4().hex[:8])
                 _, zipped = build_semantic_project(
-                    result, output, json.loads(item["model_plan_json"])
+                    result, output, json.loads(item["model_plan_json"]), name=source_name(item)
                 )
                 item = repo.update_run(item["id"], status="generated", output_path=str(zipped))
                 LOG.info("PBIP generated; run=%s", item["id"])
@@ -470,9 +604,7 @@ def create_app(home=None, shutdown=None):
                 repo.update_run(item["id"], status="failed")
                 raise
 
-    @app.get("/download")
-    def download(run_id: str):
-        item = repo.run(run_id)
+    def generated_zip(item):
         if not item or item["status"] != "generated" or not item["output_path"]:
             raise HTTPException(404, "Generate a project before downloading.")
         path = Path(item["output_path"]).resolve()
@@ -481,18 +613,65 @@ def create_app(home=None, shutdown=None):
             or not path.is_file()
         ):
             raise HTTPException(404, "Generated project file is unavailable.")
-        return FileResponse(path, filename="Pivotra-powerbi.zip", media_type="application/zip")
+        return path
+
+    @app.post("/open/powerbi")
+    def open_powerbi(body: RunRequest):
+        """Unpack the project into Documents and open it, so nobody opens a .pbip inside a ZIP."""
+        item = run_for(body)
+        zipped = generated_zip(item)
+        stem = output_stem(source_name(item))
+        root = Path(os.getenv("PIVOTRA_EXPORT_DIR") or Path.home() / "Documents" / "Pivotra")
+        target, count = root / stem, 1
+        while target.exists():
+            count += 1
+            target = root / f"{stem} ({count})"
+        # Extended paths keep deep PBIR folders writable past the 260-character limit.
+        writable = Path("\\\\?\\" + str(target.resolve())) if os.name == "nt" else target
+        with ZipFile(zipped) as archive:
+            for member in archive.infolist():
+                parts = Path(member.filename).parts[1:]  # drop the ZIP's top folder
+                if member.is_dir() or not parts or ".." in parts:
+                    continue
+                destination = writable.joinpath(*parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(archive.read(member))
+        project_file = next(target.glob("*.pbip"), None)
+        if project_file is None:
+            raise HTTPException(500, "The generated project has no .pbip file.")
+        opened = False
+        if hasattr(os, "startfile"):
+            try:
+                os.startfile(project_file)
+                opened = True
+            except OSError:
+                LOG.warning("Power BI Desktop could not be launched for %s", project_file)
+        return {"folder": str(target), "project": str(project_file), "opened": opened}
+
+    @app.get("/download")
+    def download(run_id: str):
+        path = generated_zip(repo.run(run_id))
+        item = repo.run(run_id)
+        return FileResponse(
+            path, filename=download_name(item, "-powerbi.zip"), media_type="application/zip"
+        )
 
     @app.get("/download/excel")
     def download_excel(run_id: str):
         with app.state.pipeline_lock:
             item = repo.run(run_id)
-            if not item or item["status"] not in {"applied", "modeled", "generated"}:
+            if not item or item["status"] not in CLEANED:
                 raise HTTPException(409, "Clean a workbook first.")
-            target = clean_excel(load_result(item), run_dir(item) / "Pivotra-cleaned.xlsx")
+            audit_file = run_dir(item) / "audit.json"
+            target = clean_excel(
+                load_result(item),
+                run_dir(item) / "cleaned-download.xlsx",
+                read_json(audit_file) if audit_file.exists() else None,
+                source_name(item),
+            )
             return FileResponse(
                 target,
-                filename="Pivotra-cleaned.xlsx",
+                filename=download_name(item, "-cleaned.xlsx"),
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 

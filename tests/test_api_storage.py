@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -5,6 +6,7 @@ import socket
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,11 +39,30 @@ def upload(client, source=FIXTURE):
     return {"project_id": data["project"]["id"], "run_id": data["run"]["id"]}, data
 
 
+def check_quality(client, ids, choose=None):
+    inspected = client.post("/quality/inspect", json=ids)
+    assert inspected.status_code == 200, inspected.text
+    decisions = {
+        table: {
+            item["category"]: {
+                "action": (choose or {}).get(item["category"], item["default_action"] or "ignore")
+            }
+            for item in report["categories"]
+        }
+        for table, report in inspected.json()["report"].items()
+    }
+    response = client.post("/quality", json=ids | {"decisions": decisions})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 def pipeline(client, ids):
     planned = client.post("/plan", json=ids)
     assert planned.status_code == 200, planned.text
     ids["run_id"] = planned.json()["run"]["id"]
-    for endpoint in ["/apply", "/model", "/generate"]:
+    assert client.post("/apply", json=ids).status_code == 200
+    check_quality(client, ids)
+    for endpoint in ["/model", "/generate"]:
         response = client.post(endpoint, json=ids)
         assert response.status_code == 200, response.text
     return response.json()
@@ -206,3 +227,72 @@ def test_rotating_log_formatter_redacts_secrets():
         "test", logging.ERROR, "", 0, "Authorization: FAKE_LOG_SECRET_77", (), None
     )
     assert "FAKE_LOG_SECRET_77" not in RedactingFormatter("%(message)s").format(record)
+
+
+def test_quality_stage_gates_modeling_and_stops_for_user_fixes(tmp_path):
+    _, client = client_for(tmp_path)
+    source = b"Order ID,Customer,Quantity,Revenue\nA1, Ann ,3,$1200\nA2,N/A,-2,300\nA2,N/A,-2,300\n"
+    uploaded = client.post(
+        "/upload?filename=orders.csv",
+        content=source,
+        headers={"Content-Type": "application/octet-stream"},
+    ).json()
+    ids = {"project_id": uploaded["project"]["id"], "run_id": uploaded["run"]["id"]}
+    stored = Path(uploaded["project"]["source_path"])
+    before = stored.read_bytes()
+    ids["run_id"] = client.post("/plan", json=ids).json()["run"]["id"]
+    assert client.post("/apply", json=ids).status_code == 200
+    assert client.post("/model", json=ids).status_code == 409
+    assert client.post("/quality", json=ids).status_code == 409  # inspect first
+    report = client.post("/quality/inspect", json=ids).json()["report"]
+    found = {item["category"] for table in report.values() for item in table["categories"]}
+    assert {"formatting", "missing", "exact_duplicates"} <= found
+    unchosen = client.post("/quality", json=ids | {"decisions": {}})
+    assert unchosen.status_code in {400, 422}
+    assert (
+        client.get("/runs", params={"project_id": ids["project_id"]}).json()["runs"][0]["status"]
+        == "applied"
+    )
+    stopped = check_quality(client, ids, {"missing": "i_will_fix"})
+    assert stopped["stopped"] and stopped["run"]["status"] == "needs_fix"
+    assert client.post("/model", json=ids).status_code == 409
+    saved = client.get("/download/quality", params={"run_id": ids["run_id"]})
+    assert saved.status_code == 200 and saved.json()["audit"]
+    assert client.get("/download/excel", params={"run_id": ids["run_id"]}).status_code == 200
+    run_dir = tmp_path / "projects" / ids["project_id"] / "runs" / ids["run_id"]
+    assert (run_dir / "cleaned.xlsx").exists() and (run_dir / "audit.json").exists()
+    fixed = check_quality(client, ids, {"exact_duplicates": "fix_for_me"})
+    assert fixed["run"]["status"] == "checked"
+    assert next(iter(fixed["tables"].values()))["row_count"] == 2
+    assert client.post("/model", json=ids).status_code == 200
+    assert stored.read_bytes() == before  # the user's workbook is never modified
+    excel = client.get("/download/excel", params={"run_id": ids["run_id"]})
+    assert 'filename="orders-cleaned.xlsx"' in excel.headers["content-disposition"]
+    report = client.get("/download/quality", params={"run_id": ids["run_id"]})
+    assert "orders-quality-report.json" in report.headers["content-disposition"]
+    assert client.post("/generate", json=ids).status_code == 200
+    zipped = client.get("/download", params={"run_id": ids["run_id"]})
+    assert 'filename="orders-powerbi.zip"' in zipped.headers["content-disposition"]
+    with ZipFile(io.BytesIO(zipped.content)) as archive:
+        names = archive.namelist()
+    assert any(name.endswith("/orders.pbip") for name in names)
+    assert not any("Pivotra.pbip" in name for name in names)
+
+
+def test_open_in_power_bi_unpacks_the_project_so_no_zip_is_involved(tmp_path, monkeypatch):
+    opened = []
+    monkeypatch.setenv("PIVOTRA_EXPORT_DIR", str(tmp_path / "Documents"))
+    monkeypatch.setattr(os, "startfile", opened.append, raising=False)
+    _, client = client_for(tmp_path)
+    ids, _ = upload(client)
+    assert client.post("/open/powerbi", json=ids).status_code == 404  # nothing generated yet
+    pipeline(client, ids)
+    first = client.post("/open/powerbi", json=ids).json()
+    second = client.post("/open/powerbi", json=ids).json()
+    folder = Path(first["folder"])
+    assert folder.parent == tmp_path / "Documents" and first["opened"]
+    assert (folder / "workbook.pbip").is_file()
+    assert (folder / "workbook.Report" / "definition.pbir").is_file()
+    assert (folder / "workbook.SemanticModel" / "definition.pbism").is_file()
+    assert second["folder"] != first["folder"]  # never overwrites an earlier copy
+    assert [Path(path).name for path in opened] == ["workbook.pbip", "workbook.pbip"]

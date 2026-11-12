@@ -7,20 +7,142 @@ from uuid import NAMESPACE_URL, uuid5
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from sheetforge.modeler import heuristic_model, validate_model
-from sheetforge.pbip.generator import SCHEMA, identifier, projection, tmdl_table, visual
+from sheetforge.paths import output_stem
+from sheetforge.pbip.generator import (
+    SCHEMA,
+    identifier,
+    literal,
+    projection,
+    textbox,
+    tmdl_table,
+    visual,
+)
 from sheetforge.pbip.power_query import power_query
 from sheetforge.pbip.validation import validate_documents
+from sheetforge.planner.heuristic import friendly
+
+HEADER, MARGIN, GAP, WIDTH, HEIGHT = 64, 24, 16, 1280, 720
+INK, CREAM, PAPER, LINE, BODY, MUTED = (
+    "#15130F",
+    "#F3ECDD",
+    "#FBF7EE",
+    "#E2D8C6",
+    "#3E3A32",
+    "#857E70",
+)
+
+
+def solid(color):
+    return {"solid": {"color": color}}
+
+
+# Report-wide look (Power BI theme "visualStyles"): cream page, white rounded cards, ink text.
+THEME_STYLES = {
+    "page": {"*": {"background": [{"color": solid(CREAM), "transparency": 0}]}},
+    "*": {
+        "*": {
+            "background": [{"show": True, "color": solid("#FFFFFF"), "transparency": 0}],
+            "border": [{"show": True, "color": solid(LINE), "radius": 12}],
+            "dropShadow": [{"show": False}],
+            "padding": [{"top": 10, "bottom": 10, "left": 14, "right": 14}],
+            "title": [
+                {
+                    "show": True,
+                    "fontColor": solid(INK),
+                    "fontSize": 12,
+                    "fontFamily": "Segoe UI Semibold",
+                }
+            ],
+        }
+    },
+    "card": {
+        "*": {
+            "labels": [{"color": solid(INK), "fontSize": 30, "fontFamily": "Segoe UI Semibold"}],
+            "categoryLabels": [{"show": False}],
+        }
+    },
+    "tableEx": {
+        "*": {
+            "columnHeaders": [
+                {
+                    "fontColor": solid(CREAM),
+                    "backColor": solid(INK),
+                    "fontFamily": "Segoe UI Semibold",
+                }
+            ],
+            "values": [
+                {
+                    "fontColorPrimary": solid(BODY),
+                    "backColorPrimary": solid("#FFFFFF"),
+                    "fontColorSecondary": solid(BODY),
+                    "backColorSecondary": solid(PAPER),
+                }
+            ],
+            "grid": [{"gridHorizontalColor": solid(LINE), "gridVerticalColor": solid(LINE)}],
+        }
+    },
+    "lineChart": {"*": {"lineStyles": [{"strokeWidth": 3}]}},
+    "slicer": {"*": {"header": [{"fontColor": solid(MUTED), "fontSize": 10}]}},
+    # The header band draws its own ink background and has no border.
+    "textbox": {
+        "*": {
+            "border": [{"show": False}],
+            "padding": [{"top": 0, "bottom": 0, "left": 0, "right": 0}],
+        }
+    },
+}
 
 
 def layout(specs):
-    if len(specs) == 3 and specs[0].kind == "card":
-        return [(30, 30, 1220, 130), (30, 180, 600, 510), (650, 180, 600, 510)]
-    rows = (len(specs) + 1) // 2
-    height = (660 - (rows - 1) * 20) / rows
-    return [(30 + i % 2 * 620, 30 + i // 2 * (height + 20), 600, height) for i in range(len(specs))]
+    """Dashboard grid: KPI cards on top, wide trends, side-by-side breakdowns, table last."""
+    geometry = [None] * len(specs)
+    inner = WIDTH - 2 * MARGIN
+    # Rows top to bottom: KPI cards + filters, trend, breakdowns (bar/donut), records table.
+    groups = {
+        "top": ["card", "slicer"],
+        "line": ["line"],
+        "bar": ["bar", "donut"],
+        "table": ["table"],
+    }
+    kinds = {
+        group: [i for i, spec in enumerate(specs) if spec.kind in members]
+        for group, members in groups.items()
+    }
+    kinds["card"] = kinds.pop("top")
+    weight = {"line": 1.3, "bar": 1.0, "table": 1.0}
+    rows = [
+        (kind, kinds[kind][start : start + 3])
+        for kind in ["line", "bar", "table"]
+        for start in range(0, len(kinds[kind]), 3)
+    ]
+
+    def place(indexes, y, height):
+        width = (inner - GAP * (len(indexes) - 1)) / len(indexes)
+        for slot, index in enumerate(indexes):
+            geometry[index] = (
+                round(MARGIN + slot * (width + GAP)),
+                round(y),
+                round(width),
+                round(height),
+            )
+
+    y = HEADER + MARGIN
+    if kinds["card"]:
+        height = 110 if rows else HEIGHT - MARGIN - y
+        place(kinds["card"], y, height)
+        y += height + GAP
+    if rows:
+        available = HEIGHT - MARGIN - y - GAP * (len(rows) - 1)
+        total = sum(weight[kind] for kind, _ in rows)
+        for kind, indexes in rows:
+            height = available * weight[kind] / total
+            place(indexes, y, height)
+            y += height + GAP
+    return geometry
 
 
-def build_semantic_project(result, out, model_plan=None):
+def build_semantic_project(result, out, model_plan=None, name=None):
+    """name: the uploaded file name; the project, report and model are named after it."""
     if result.plan is None or result.source is None:
         raise ValueError("A validated cleaning result is required.")
     plan = validate_model(model_plan or heuristic_model(result.tables), result.tables)
@@ -28,9 +150,10 @@ def build_semantic_project(result, out, model_plan=None):
     zipped = out.with_suffix(".zip")
     if out.exists() or zipped.exists():
         raise ValueError("Output folder or ZIP already exists; choose a new output path.")
-    rd, md = "Pivotra.Report", "Pivotra.SemanticModel"
+    stem = output_stem(name or result.source.name)
+    rd, md = stem + ".Report", stem + ".SemanticModel"
     documents = {
-        "Pivotra.pbip": {
+        stem + ".pbip": {
             "$schema": SCHEMA + "pbip/pbipProperties/1.0.0/schema.json",
             "version": "1.0",
             "artifacts": [{"report": {"path": rd}}],
@@ -72,16 +195,17 @@ def build_semantic_project(result, out, model_plan=None):
         },
         rd + "/StaticResources/RegisteredResources/Pivotra.json": {
             "name": "Pivotra",
-            "dataColors": ["#6D5DF6", "#B8862B", "#39305F", "#B9AEFA"],
+            "dataColors": ["#B5562A", "#2F5A43", "#D9A47E", "#15130F", "#7FA88F", "#E8C9A9"],
             "background": "#FFFFFF",
-            "foreground": "#24212F",
-            "tableAccent": "#6D5DF6",
+            "foreground": "#15130F",
+            "tableAccent": "#B5562A",
             "textClasses": {
-                "title": {"fontFace": "Segoe UI Semibold", "fontSize": 14, "color": "#39305F"},
-                "label": {"fontFace": "Segoe UI", "fontSize": 11, "color": "#716B80"},
-                "callout": {"fontFace": "Segoe UI Semibold", "fontSize": 32, "color": "#39305F"},
-                "header": {"fontFace": "Segoe UI Semibold", "fontSize": 12, "color": "#39305F"},
+                "title": {"fontFace": "Segoe UI Semibold", "fontSize": 13, "color": "#15130F"},
+                "label": {"fontFace": "Segoe UI", "fontSize": 10, "color": "#857E70"},
+                "callout": {"fontFace": "Segoe UI Semibold", "fontSize": 30, "color": "#15130F"},
+                "header": {"fontFace": "Segoe UI Semibold", "fontSize": 12, "color": "#15130F"},
             },
+            "visualStyles": THEME_STYLES,
         },
     }
     text = {md + "/definition/database.tmdl": "database\n\tcompatibilityLevel: 1601\n"}
@@ -102,7 +226,8 @@ def build_semantic_project(result, out, model_plan=None):
         text[f"{md}/definition/tables/Table{index:03d}.tmdl"] = (
             content + f"\tannotation Pivotra_Role = {role.role}\n"
         )
-        references.append("\tref table " + identifier(name))
+        # TMDL ref statements are top-level lines; indenting them under "model" is a parse error.
+        references.append("ref table " + identifier(name))
     text[md + "/definition/model.tmdl"] = (
         "model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\tsourceQueryCulture: en-US\n\n"
         + "\n".join(references)
@@ -129,7 +254,8 @@ def build_semantic_project(result, out, model_plan=None):
                 "",
             ]
         )
-    text[md + "/definition/relationships.tmdl"] = "\n".join(relationships)
+    if relationships:  # Power BI omits this file when a model has no relationships
+        text[md + "/definition/relationships.tmdl"] = "\n".join(relationships)
     page_names = [f"page_{i:03d}" for i in range(1, len(plan.pages) + 1)]
     documents[rd + "/definition/pages/pages.json"] = {
         "$schema": SCHEMA + "item/report/definition/pagesMetadata/1.0.0/schema.json",
@@ -144,9 +270,12 @@ def build_semantic_project(result, out, model_plan=None):
             "name": page_id,
             "displayName": page.title,
             "displayOption": "FitToPage",
-            "width": 1280,
-            "height": 720,
+            "width": WIDTH,
+            "height": HEIGHT,
         }
+        documents[f"{prefix}/visuals/visual_000/visual.json"] = textbox(
+            "visual_000", (friendly(stem) or stem) + "  ·  " + page.title, 0, 0, WIDTH, HEADER
+        )
         for index, (spec, geometry) in enumerate(
             zip(page.visuals, layout(page.visuals), strict=True), 1
         ):
@@ -162,7 +291,12 @@ def build_semantic_project(result, out, model_plan=None):
                         ]
                     }
                 }
+                # The helper keeps identical rows apart; show it as a plain row number.
+                query["Values"]["projections"][0]["displayName"] = "#"
                 kind = "tableEx"
+            elif spec.kind == "slicer":
+                query = {"Values": {"projections": [projection(spec.table, spec.category)]}}
+                kind = "slicer"
             else:
                 owner = measures[spec.measure].table
                 value = projection(owner, spec.measure, measure=True)
@@ -178,10 +312,20 @@ def build_semantic_project(result, out, model_plan=None):
                         "Y": {"projections": [value]},
                     }
                 )
-                kind = {"card": "card", "bar": "clusteredBarChart", "line": "lineChart"}[spec.kind]
+                kind = {
+                    "card": "card",
+                    "bar": "clusteredBarChart",
+                    "line": "lineChart",
+                    "donut": "donutChart",
+                }[spec.kind]
+            objects = {
+                # The title already names the number; hide the duplicate grey label.
+                "card": {"categoryLabels": [{"properties": {"show": literal("false")}}]},
+                "slicer": {"data": [{"properties": {"mode": literal("'Dropdown'")}}]},
+            }.get(spec.kind)
             name = f"visual_{index:03d}"
             documents[f"{prefix}/visuals/{name}/visual.json"] = visual(
-                name, kind, query, spec.title, *geometry
+                name, kind, query, spec.title, *geometry, objects=objects
             )
     validated = validate_documents(documents)
     documents |= {
@@ -198,7 +342,9 @@ def build_semantic_project(result, out, model_plan=None):
         },
     }
     text["OPEN_IN_DESKTOP.txt"] = (
-        "Open Pivotra.pbip and select Refresh. The model reads the original XLSX at:\n"
+        "Open "
+        + stem
+        + ".pbip and select Refresh. The model reads the original XLSX at:\n"
         + str(result.source)
         + "\n\nKeep this file in place. For moved sources, edit File.Contents in Power Query. Source value edits and appended records in the last table can refresh. Structural changes require regenerating the plans.\n\nRelationships are many-to-one, one-direction, with checked unique parent keys and complete coverage at generation time. Inspect model_plan.json and steps.json. Native Desktop/TMDL/M execution remains unverified here.\n"
     )
@@ -221,5 +367,6 @@ def build_semantic_project(result, out, model_plan=None):
     with ZipFile(zipped, "w", ZIP_DEFLATED) as archive:
         for path in sorted(out.rglob("*")):
             if path.is_file():
-                archive.write(path, str(Path(out.name) / path.relative_to(out)))
-    return public_out / "Pivotra.pbip", public_zip
+                # The extracted folder is named after the uploaded file, not the internal run folder.
+                archive.write(path, str(Path(stem) / path.relative_to(out)))
+    return public_out / (stem + ".pbip"), public_zip

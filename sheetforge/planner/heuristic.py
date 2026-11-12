@@ -121,16 +121,52 @@ def one_table(rows, merged, bounds, sheet, name):
     )
 
 
-def heuristic_plan(profile, sheet_name=None):
+GENERIC_SHEET = re.compile(
+    r"^(?:sheet|sheet ?\d+|data|table ?\d*|export|query ?\d*|page ?\d+)$", re.I
+)
+
+
+def friendly(text):
+    """'01_renamed_headers' -> 'Renamed Headers'; mixed-case names keep the user's casing."""
+    text = re.sub(r"^[\d\s_.-]+", "", str(text or ""))
+    text = re.sub(r"\s+", " ", re.sub(r"[_.]+|(?<=\w)-(?=\w)", " ", text)).strip()
+    return text.title() if text.islower() else text
+
+
+def table_names(profile, sheets, title):
+    """Readable, unique table names: the sheet name, or the file name for generic sheets."""
+    fallback = friendly(title or getattr(profile.source, "stem", "")) or "Data"
+    names, used = {}, set()
+    for sheet in sheets:
+        base = friendly(sheet)
+        if not base or GENERIC_SHEET.match(base):
+            base = fallback
+        base = base[:90]
+        count = len(profile.sheets[sheet]["blocks"])
+        for index in range(1, count + 1):
+            candidate = base if count == 1 else f"{base} {index}"
+            suffix = 2
+            while candidate.casefold() in used:
+                candidate = f"{base} ({suffix})" if count == 1 else f"{base} {index} ({suffix})"
+                suffix += 1
+            used.add(candidate.casefold())
+            names[sheet, index] = candidate
+    return names
+
+
+def heuristic_plan(profile, sheet_name=None, *, title=None):
+    """title: the uploaded file name, used to name tables on generically named sheets."""
     sheets = [sheet_name] if sheet_name else list(profile.sheets)
     plans = []
     for sheet in sheets:
         if sheet not in profile.sheets:
             raise ValueError("Worksheet is not present in the profile.")
+    names = table_names(profile, sheets, title)
+    for sheet in sheets:
         rows, merged = read_sheet(profile.source, sheet)
         for index, raw_bounds in enumerate(profile.sheets[sheet]["blocks"], 1):
             bounds = Bounds.model_validate(raw_bounds)
-            plans.append(one_table(rows, merged, bounds, sheet, f"{sheet}_Table{index}"))
+            plans.append(one_table(rows, merged, bounds, sheet, names[sheet, index]))
     if not plans:
         raise ValueError(
             "No nonempty numeric tables were found. Select a sheet with headers and data."

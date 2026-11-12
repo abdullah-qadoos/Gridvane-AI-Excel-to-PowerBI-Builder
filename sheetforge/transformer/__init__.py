@@ -1,3 +1,3 @@
-from .engine import TransformResult, apply_plan
+from .engine import TransformResult, apply_plan, cast_table
 
-__all__ = ["TransformResult", "apply_plan"]
+__all__ = ["TransformResult", "apply_plan", "cast_table"]

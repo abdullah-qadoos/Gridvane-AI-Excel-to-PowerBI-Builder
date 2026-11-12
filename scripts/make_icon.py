@@ -15,17 +15,17 @@ def rounded(x, y, left, top, width, height, radius):
 def color(x, y):
     if not rounded(x, y, 8, 8, 176, 176, 44):
         return (0, 0, 0, 0)
-    result = (36, 31, 72, 255)
+    result = (47, 90, 67, 255)
     if 57 <= math.hypot(x - 96, y - 96) <= 71:
-        result = (82, 69, 141, 255)
+        result = (71, 115, 91, 255)
     for left in (57, 76):
         for top in (71, 90, 109):
             if rounded(x, y, left, top, 13, 13, 3):
-                result = (255, 255, 255, 255)
+                result = (243, 236, 221, 255)
     for left, top, height, rgb in [
-        (99, 106, 16, (159, 141, 255)),
-        (117, 90, 32, (214, 173, 98)),
-        (134, 74, 48, (255, 255, 255)),
+        (99, 106, 16, (200, 101, 47)),
+        (117, 90, 32, (227, 181, 140)),
+        (134, 74, 48, (243, 236, 221)),
     ]:
         if rounded(x, y, left, top, 11, height, 3):
             result = (*rgb, 255)

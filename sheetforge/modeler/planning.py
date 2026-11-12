@@ -10,6 +10,15 @@ from pydantic import Field, model_validator
 from sheetforge.contracts import Contract
 from sheetforge.llm.client import CompletionUnavailable, complete, enabled
 
+AVERAGED = re.compile(
+    r"percent|pct|%|rate|utili[sz]ation|ratio|score|average|avg|mean|price|unit cost", re.I
+)
+FILTER_NAME = re.compile(
+    r"region|country|state|city|team|department|segment|type|category|plan", re.I
+)
+ID_COLUMN = re.compile(r"(?:^|[ _-])(?:id|code|key|ref|no|nr|number|zip|postal)$", re.I)
+CAMEL_ID = re.compile(r"[a-z](?:ID|Id)$")  # case-sensitive so "Paid" or "Valid" never match
+
 
 class TableRole(Contract):
     name: str
@@ -31,7 +40,7 @@ class Measure(Contract):
 
 
 class SuggestedVisual(Contract):
-    kind: Literal["card", "bar", "line", "table"]
+    kind: Literal["card", "bar", "line", "table", "donut", "slicer"]
     table: str
     title: str
     measure: str | None = None
@@ -42,7 +51,7 @@ class SuggestedVisual(Contract):
 class ReportPage(Contract):
     name: str
     title: str
-    visuals: list[SuggestedVisual] = Field(min_length=1, max_length=6)
+    visuals: list[SuggestedVisual] = Field(min_length=1, max_length=8)
 
 
 class SemanticModelPlan(Contract):
@@ -192,9 +201,16 @@ def validate_model(plan, tables):
                 tables[visual.table].columns
             ):
                 raise ValueError("A visual references an unavailable table or column.")
-            if visual.kind != "table" and visual.measure not in measures:
+            if visual.kind == "slicer" and visual.category is None:
+                raise ValueError("Slicers need a column to filter by.")
+            if visual.kind not in {"table", "slicer"} and visual.measure not in measures:
                 raise ValueError("Charts/cards need an available measure.")
-            if visual.kind in {"bar", "line"} and measures[visual.measure].table != visual.table:
+            if visual.kind == "donut" and visual.category is None:
+                raise ValueError("Donut charts need a category column.")
+            if (
+                visual.kind in {"bar", "line", "donut"}
+                and measures[visual.measure].table != visual.table
+            ):
                 reachable, pending = set(), [visual.table]
                 while pending:
                     name = pending.pop()
@@ -246,64 +262,134 @@ def heuristic_model(tables):
                     roles[dimension_name] = "dimension"
                     connected.add(edge)
                     break
-    measures, pages = [], []
+    measures, pages, sections = [], [], []
     used = set()
     for name, frame in tables.items():
 
-        def add_measure(label, dax, owner=name, columns=frozenset(frame.columns)):
-            label = owner + " · " + label
-            while label.casefold() in used or label in columns:
+        def add_measure(label, dax, owner=name, fmt="#,##0.##"):
+            # Plain names ("Total GPUs"); the table is only added when two tables would clash.
+            taken = used | {column.casefold() for frame in tables.values() for column in frame}
+            if label.casefold() in taken:
+                label = f"{label} ({owner})"
+            while label.casefold() in taken:
                 label += "_"
             used.add(label.casefold())
-            measures.append(Measure(table=owner, name=label, dax=dax))
+            measures.append(Measure(table=owner, name=label, dax=dax, format_string=fmt))
             return label
+
+        def aggregate(column, name=name, frame=frame):
+            reference = f"{quoted(name)}[{column.replace(']', ']]')}]"
+            if not AVERAGED.search(column):
+                return add_measure("Total " + column, f"SUM({reference})")
+            # Percentages and rates are averaged; adding 50% + 50% would show 100%.
+            fraction = (
+                frame[column].dropna().abs().max() <= 1.5 if frame[column].notna().any() else False
+            )
+            return add_measure(
+                "Average " + column, f"AVERAGE({reference})", fmt="0.0%" if fraction else "#,##0.0"
+            )
 
         count = add_measure("Record count", f"COUNTROWS({quoted(name)})")
         totals = [
-            add_measure("Total " + column, f"SUM({quoted(name)}[{column.replace(']', ']]')}])")
+            aggregate(column)
             for column in numeric_columns(frame)
+            if not (ID_COLUMN.search(column) or CAMEL_ID.search(column))
         ]
         primary = totals[0] if totals else count
-        category = next(
-            (
-                column
-                for column in frame
-                if column not in numeric_columns(frame)
-                and not pd.api.types.is_datetime64_any_dtype(frame[column])
-            ),
-            None,
-        )
-        visual_specs = [
-            SuggestedVisual(kind="card", table=name, title=primary, measure=primary),
-            SuggestedVisual(
-                kind="bar", table=name, title="Comparison", measure=primary, category=category
-            ),
-            SuggestedVisual(
-                kind="table", table=name, title="Cleaned records", columns=list(frame.columns)
-            ),
+        # Readable groupings only: text columns with 2-50 values, never IDs or one-per-row columns.
+        groupings = [
+            column
+            for column in frame
+            if column not in numeric_columns(frame)
+            and not pd.api.types.is_datetime64_any_dtype(frame[column])
+            and not (ID_COLUMN.search(column) or CAMEL_ID.search(column))
+            and 2 <= frame[column].nunique() <= 50
+            and (len(frame) < 10 or frame[column].nunique() < 0.9 * frame[column].notna().sum())
         ]
+        category = groupings[0] if groupings else None
+        small = sorted(
+            (c for c in groupings if frame[c].nunique() <= 8), key=lambda c: frame[c].nunique()
+        )
+        # A share donut reads best with a few slices; prefer a different column than the bar.
+        donut = next((c for c in small if c != category), small[0] if small else None)
+        filter_by = next(
+            (c for c in groupings if FILTER_NAME.search(c) and c not in {category, donut}),
+            next((c for c in groupings if c not in {category, donut}), category),
+        )
         date = next(
             (column for column in frame if pd.api.types.is_datetime64_any_dtype(frame[column])),
             None,
         )
+        charts = []
         if date:
-            visual_specs.insert(
-                2,
+            charts.append(
                 SuggestedVisual(
-                    kind="line", table=name, title="Time trend", measure=primary, category=date
-                ),
+                    kind="line",
+                    table=name,
+                    title=f"{primary} over time",
+                    measure=primary,
+                    category=date,
+                )
             )
-        pages.append(ReportPage(name="Data · " + name, title=name, visuals=visual_specs))
+        charts.append(
+            SuggestedVisual(
+                kind="bar",
+                table=name,
+                title=f"{primary} by {category}" if category else primary,
+                measure=primary,
+                category=category,
+            )
+        )
+        if donut:
+            charts.append(
+                SuggestedVisual(
+                    kind="donut",
+                    table=name,
+                    title=f"Share of {primary} by {donut}",
+                    measure=primary,
+                    category=donut,
+                )
+            )
+        sections.append(
+            {
+                "name": name,
+                "measures": [count, *totals],
+                "charts": charts,
+                "slicer": [
+                    SuggestedVisual(kind="slicer", table=name, title=filter_by, category=filter_by)
+                ]
+                if filter_by
+                else [],
+                "table": SuggestedVisual(
+                    kind="table", table=name, title="All records", columns=list(frame.columns)
+                ),
+            }
+        )
+
+    def cards(names):
+        owner = {measure.name: measure.table for measure in measures}
+        return [SuggestedVisual(kind="card", table=owner[n], title=n, measure=n) for n in names]
+
+    # Overview: KPI row, a filter, then the first table's trend and breakdowns.
+    first = sections[0]
+    headline = [measure.name for measure in measures[:4]]
     overview = ReportPage(
         name="Overview",
         title="Overview",
-        visuals=[
-            SuggestedVisual(
-                kind="card", table=measure.table, title=measure.name, measure=measure.name
-            )
-            for measure in measures[:4]
-        ],
+        visuals=cards(headline) + first["slicer"] + first["charts"][:3],
     )
+    # One page per table: the numbers not on the overview, its own charts, a large table.
+    for index, section in enumerate(sections):
+        extra = [n for n in section["measures"] if n not in headline][:4] or section["measures"][:1]
+        own_charts = [] if index == 0 else section["charts"][:2]
+        title = section["name"] if len(sections) > 1 else "Details"
+        pages.append(
+            ReportPage(
+                name="Data · " + section["name"],
+                title=title,
+                visuals=section["slicer"] + cards(extra) + own_charts + [section["table"]],
+            )
+        )
     plan = SemanticModelPlan(
         tables=[TableRole(name=name, role=role) for name, role in roles.items()],
         relationships=relationships,

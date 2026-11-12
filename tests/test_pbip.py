@@ -36,7 +36,8 @@ def test_each_fixture_can_generate_a_schema_valid_minimal_project(source, tmp_pa
     root = project.parent
     model = root / "Pivotra.SemanticModel" / "definition"
     assert (model / "model.tmdl").is_file()
-    assert (model / "relationships.tmdl").is_file()
+    assert not (model / "relationships.tmdl").exists()  # omitted when there are none
+    assert "\nref table " in (model / "model.tmdl").read_text(encoding="utf-8")
     assert len(list((model / "tables").glob("*.tmdl"))) == 1
     table = (model / "tables" / "Table001.tmdl").read_text(encoding="utf-8")
     assert "Excel.Workbook(File.Contents(" in table
@@ -69,8 +70,8 @@ def test_original_data_is_not_embedded_and_numeric_measures_are_explicit(tmp_pat
     source = FIXTURES / "header_not_row1.xlsx"
     project, _ = build_project(result_for(source), tmp_path / "Project")
     table = next(project.parent.rglob("Table001.tmdl")).read_text(encoding="utf-8")
-    assert "SUM('Data_Table1'[Revenue])" in table
-    assert "SUM('Data_Table1'[Units])" in table
+    assert "SUM('Header Not Row1'[Revenue])" in table
+    assert "SUM('Header Not Row1'[Units])" in table
     assert "North" not in table and "South" not in table
     assert "List.Skip(Table.ToRows(Raw)" in table
 
@@ -134,3 +135,23 @@ def test_wide_refresh_query_preserves_missing_cells_instead_of_native_unpivot(tm
     table = next(project.parent.rglob("Table001.tmdl")).read_text(encoding="utf-8")
     assert "Table.FromRecords(List.Combine" in table
     assert "Table.Unpivot(" not in table
+
+
+def test_dashboard_layout_has_header_band_and_no_overlaps():
+    from sheetforge.modeler.planning import SuggestedVisual
+    from sheetforge.pbip.semantic import HEADER, HEIGHT, WIDTH, layout
+
+    specs = [
+        SuggestedVisual(kind=kind, table="T", title=kind, measure="m")
+        for kind in ["card", "card", "card", "card", "slicer", "line", "bar", "donut"]
+    ] + [SuggestedVisual(kind="table", table="T", title="t")]
+    boxes = layout(specs)
+    assert all(
+        y >= HEADER and x >= 0 and x + w <= WIDTH and y + h <= HEIGHT for x, y, w, h in boxes
+    )
+    assert len({y for x, y, w, h in boxes[:5]}) == 1  # KPI cards and the filter share one row
+    assert boxes[5][1] < boxes[6][1]  # the trend sits above the breakdowns
+    assert boxes[6][1] == boxes[7][1]  # bar and donut sit side by side
+    for i, (x1, y1, w1, h1) in enumerate(boxes):
+        for x2, y2, w2, h2 in boxes[i + 1 :]:
+            assert x1 + w1 <= x2 or x2 + w2 <= x1 or y1 + h1 <= y2 or y2 + h2 <= y1

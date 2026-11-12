@@ -18,9 +18,11 @@ class TransformResult:
     warnings: list[str] = field(default_factory=list)
     plan: CleaningPlan | None = None
     source: Path | None = None
+    types: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
-def apply_plan(path, plan):
+def apply_plan(path, plan, *, cast=True):
+    """cast=False keeps layout-cleaned raw values so the quality stage can inspect them first."""
     plan = CleaningPlan.model_validate(
         plan.model_dump() if isinstance(plan, CleaningPlan) else plan
     )
@@ -134,33 +136,47 @@ def apply_plan(path, plan):
             )
         if not set(types) <= set(frame.columns):
             raise ValueError("Column types reference unavailable columns.")
-        for column in frame:
-            kind = types.get(column, "string")
-            values = frame[column]
-            present = values.notna() & values.astype("string").str.strip().ne("")
-            if kind in {"number", "integer"}:
-                converted = values.map(number).astype("Float64")
-                if kind == "integer":
-                    converted = converted.where(converted.mod(1).eq(0)).astype("Int64")
-            elif kind == "date":
-                converted = dates(values)
-            elif kind == "boolean":
-                converted = values.map(
-                    lambda value: {"true": True, "false": False, "1": True, "0": False}.get(
-                        str(value).strip().lower()
-                    )
-                ).astype("boolean")
-            else:
-                converted = values.astype("string").str.strip()
-            invalid = int((present & converted.isna()).sum())
-            if invalid:
-                result.warnings.append(
-                    f"{table.table_name}.{column}: {invalid} nonblank values could not be parsed as {kind}; retained as missing."
+        result.types[table.table_name] = {column: types.get(column, "string") for column in frame}
+        frame = frame.reset_index(drop=True)
+        if cast:
+            frame = cast_table(frame, result.types[table.table_name], table.table_name, result)
+        result.tables[table.table_name] = frame
+    return result
+
+
+def cast_table(frame, types, table_name, result):
+    frame = frame.copy()
+    for column in frame:
+        kind = types.get(column, "string")
+        values = frame[column]
+        present = values.notna() & values.astype("string").str.strip().ne("")
+        if kind in {"number", "integer"}:
+            converted = values.map(number).astype("Float64")
+            if kind == "integer":
+                converted = converted.where(converted.mod(1).eq(0)).astype("Int64")
+        elif kind == "date":
+            converted = dates(values)
+        elif kind == "boolean":
+            converted = values.map(
+                lambda value: {"true": True, "false": False, "1": True, "0": False}.get(
+                    str(value).strip().lower()
                 )
-            frame[column] = converted
-            step(
-                "cast_column",
-                f"Parsed {column} as {kind}"
+            ).astype("boolean")
+        else:
+            converted = values.astype("string").str.strip()
+        invalid = int((present & converted.isna()).sum())
+        if invalid:
+            result.warnings.append(
+                f"{table_name}.{column}: {invalid} nonblank values could not be parsed as {kind}; retained as missing."
+            )
+        frame[column] = converted
+        result.steps.append(
+            AppliedStep(
+                table=table_name,
+                action="cast_column",
+                rows_before=len(frame),
+                rows_after=len(frame),
+                description=f"Parsed {column} as {kind}"
                 + (
                     " with currency/unit normalization"
                     if kind in {"number", "integer"}
@@ -169,10 +185,7 @@ def apply_plan(path, plan):
                     else ""
                 )
                 + f"; {invalid} invalid value(s) marked missing.",
-                len(frame),
-                len(frame),
-                {"column": column, "type": kind, "invalid": invalid},
+                parameters={"column": column, "type": kind, "invalid": invalid},
             )
-        frame = frame.reset_index(drop=True)
-        result.tables[table.table_name] = frame
-    return result
+        )
+    return frame

@@ -100,7 +100,18 @@ def main():
                             "project_id": uploaded["project"]["id"],
                             "run_id": uploaded["run"]["id"],
                         }
-                        for endpoint in ["/plan", "/apply", "/model", "/generate"]:
+                        for endpoint in ["/plan", "/apply", "/quality/inspect"]:
+                            result = request(endpoint, ids)
+                            assert result["run"]["id"] == ids["run_id"]
+                        decisions = {
+                            table: {
+                                item["category"]: {"action": item["default_action"] or "ignore"}
+                                for item in report["categories"]
+                            }
+                            for table, report in result["report"].items()
+                        }
+                        request("/quality", ids | {"decisions": decisions})
+                        for endpoint in ["/model", "/generate"]:
                             result = request(endpoint, ids)
                             assert result["run"]["id"] == ids["run_id"]
                         assert result["run"]["status"] == "generated"
@@ -118,7 +129,7 @@ def main():
                     )
                     downloaded = request("/download?run_id=" + ids["run_id"], raw=True)
                     with zipfile.ZipFile(io.BytesIO(downloaded)) as archive:
-                        assert any(name.endswith("Pivotra.pbip") for name in archive.namelist())
+                        assert any(name.endswith("review.pbip") for name in archive.namelist())
                         for name in archive.namelist():
                             if name.endswith((".tmdl", ".json", ".pbip", ".pbir", ".pbism")):
                                 assert not archive.read(name).startswith(b"\xef\xbb\xbf")

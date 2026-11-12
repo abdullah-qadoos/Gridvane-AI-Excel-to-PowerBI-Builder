@@ -99,6 +99,7 @@ def test_multi_table_export_has_native_pages_and_unique_measures(tmp_path):
     source = Path(__file__).parent / "fixtures" / "two_tables.xlsx"
     result = apply_plan(source, heuristic_plan(profile_workbook(source)))
     project, zipped = build_semantic_project(result, tmp_path / "multi")
+    assert project.name == result.source.stem + ".pbip"
     assert zipped.is_file()
     assert len(list(project.parent.rglob("Table*.tmdl"))) == 2
     pages = json.loads(next(project.parent.rglob("pages.json")).read_text())
@@ -108,3 +109,43 @@ def test_multi_table_export_has_native_pages_and_unique_measures(tmp_path):
     assert (
         json.loads((project.parent / "validation.json").read_text())["pbir_json_schema"] == "passed"
     )
+
+
+def test_percent_columns_are_averaged_and_ids_are_not_summed():
+    import pandas as pd
+
+    from sheetforge.modeler.planning import heuristic_model
+
+    frame = pd.DataFrame(
+        {"Order No": [1, 2], "Paid": [100.0, 50.0], "Util %": [55.0, 70.0], "Rate": [0.5, 0.7]}
+    )
+    measures = {m.name: m for m in heuristic_model({"T": frame}).measures}
+    assert measures["Average Util %"].dax.startswith("AVERAGE(")
+    assert measures["Average Rate"].format_string == "0.0%"
+    assert measures["Total Paid"].dax.startswith("SUM(")
+    assert not any("Order No" in name for name in measures)
+
+
+def test_readable_names_for_tables_measures_and_charts():
+    import pandas as pd
+
+    from sheetforge.modeler.planning import heuristic_model
+    from sheetforge.planner.heuristic import friendly
+
+    assert friendly("01_renamed_headers") == "Renamed Headers"
+    assert friendly("iPhone sales") == "iPhone sales"
+    sales_frame = pd.DataFrame({"Region": ["N", "S"], "Revenue": [1.0, 2.0]})
+    plan = heuristic_model({"Sales": sales_frame, "Returns": sales_frame.copy()})
+    names = [m.name for m in plan.measures]
+    assert "Total Revenue" in names and "Total Revenue (Returns)" in names
+    assert not any("·" in name for name in names)
+    overview, sales, returns = plan.pages
+    assert "Total Revenue by Region" in [v.title for v in overview.visuals]
+    assert "donut" in [v.kind for v in overview.visuals]
+    assert [v.kind for v in sales.visuals][0] == "slicer"
+    assert [v.kind for v in sales.visuals][-1] == "table"
+    # Pages are named after their table when there are several; charts never repeat the overview.
+    assert (sales.title, returns.title) == ("Sales", "Returns")
+    assert "Total Revenue (Returns) by Region" in [v.title for v in returns.visuals]
+    single = heuristic_model({"Sales": sales_frame})
+    assert single.pages[1].title == "Details"

@@ -38,20 +38,52 @@ def projection(table, column, *, measure=False):
     }
 
 
-def visual(name, kind, query, title, x, y, width, height):
+def visual(name, kind, query, title, x, y, width, height, objects=None):
     properties = {
         "show": {"expr": {"Literal": {"Value": "true"}}},
         "text": {"expr": {"Literal": {"Value": "'" + title.replace("'", "''") + "'"}}},
     }
+    content = {
+        "visualType": kind,
+        "query": {"queryState": query},
+        "visualContainerObjects": {"title": [{"properties": properties}]},
+        "drillFilterOtherVisuals": True,
+    }
+    if objects:
+        content["objects"] = objects
+    return {
+        "$schema": SCHEMA + "item/report/definition/visualContainer/2.4.0/schema.json",
+        "name": name,
+        "position": {"x": x, "y": y, "z": 0, "width": width, "height": height, "tabOrder": 0},
+        "visual": content,
+    }
+
+
+def literal(value):
+    return {"expr": {"Literal": {"Value": value}}}
+
+
+def textbox(name, text, x, y, width, height, *, color="#F3ECDD", background="#15130F"):
+    """A static branded text band; it needs no query and never touches data."""
+    run = {"value": text, "textStyle": {"fontWeight": "bold", "fontSize": "18pt", "color": color}}
     return {
         "$schema": SCHEMA + "item/report/definition/visualContainer/2.4.0/schema.json",
         "name": name,
         "position": {"x": x, "y": y, "z": 0, "width": width, "height": height, "tabOrder": 0},
         "visual": {
-            "visualType": kind,
-            "query": {"queryState": query},
-            "visualContainerObjects": {"title": [{"properties": properties}]},
-            "drillFilterOtherVisuals": True,
+            "visualType": "textbox",
+            "objects": {"general": [{"properties": {"paragraphs": [{"textRuns": [run]}]}}]},
+            "visualContainerObjects": {
+                "background": [
+                    {
+                        "properties": {
+                            "show": literal("true"),
+                            "color": {"solid": {"color": literal("'" + background + "'")}},
+                            "transparency": literal("0D"),
+                        }
+                    }
+                ]
+            },
         },
     }
 
@@ -264,11 +296,10 @@ def build_project(result, out, table_name=None):
     text_files = {
         model_dir + "/definition/database.tmdl": "database\n\tcompatibilityLevel: 1601\n",
         model_dir
-        + "/definition/model.tmdl": "model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\tsourceQueryCulture: en-US\n\n\tref table "
+        + "/definition/model.tmdl": "model Model\n\tculture: en-US\n\tdefaultPowerBIDataSourceVersion: powerBI_V3\n\tsourceQueryCulture: en-US\n\nref table "
         + identifier(table_name)
         + "\n",
         model_dir + "/definition/tables/Table001.tmdl": table_text,
-        model_dir + "/definition/relationships.tmdl": "",
         "OPEN_IN_DESKTOP.txt": "Pivotra - step 3 review\n\nOpen Pivotra.pbip in a current Power BI Desktop version supporting PBIP/PBIR. Enable the project preview if required.\nSelect Refresh to load the source workbook. If prompted for file privacy, choose the appropriate local file privacy level.\n\nSource workbook: "
         + str(result.source)
         + "\n\nThe model reads this ORIGINAL XLSX through Excel.Workbook(File.Contents(...)). No spreadsheet rows are embedded in this project.\nKeep the workbook at the original path; change the File.Contents path in Power Query if it moves. Data-value updates refresh in Desktop. The final table can grow when records are appended; header/layout changes require regenerating the plan/project.\n\nThe _Record helper distinguishes duplicate source records in the table visual. Numeric measures use SUM, without invented units or currency.\n\nPBIR JSON has passed the bundled Microsoft schemas. TMDL/M execution and visual rendering are pending your Desktop feedback. Report any exact error text before steps 4-6 proceed.\n",

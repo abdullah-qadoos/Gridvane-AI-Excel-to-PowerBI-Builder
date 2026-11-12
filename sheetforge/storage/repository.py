@@ -46,7 +46,9 @@ class Repository:
         with Session(self.engine) as session, session.begin():
             session.execute(
                 update(Run)
-                .where(Run.status.in_(["planning", "applying", "modeling", "generating"]))
+                .where(
+                    Run.status.in_(["planning", "applying", "checking", "modeling", "generating"])
+                )
                 .values(status="interrupted")
             )
 

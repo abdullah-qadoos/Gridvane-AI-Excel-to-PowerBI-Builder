@@ -8,7 +8,7 @@ from sheetforge.llm import LLMConfig, configure
 from sheetforge.planner import heuristic_plan, llm_planner
 from sheetforge.presentation import kpis
 from sheetforge.profiler import profile_workbook
-from tests.test_api_storage import FIXTURE, client_for
+from tests.test_api_storage import FIXTURE, check_quality, client_for
 
 
 def test_kpis_compute_real_prior_week_comparisons_and_do_not_invent_fields():
@@ -39,18 +39,27 @@ def test_csv_to_pbip_and_clean_excel_charts_are_real_outputs(tmp_path):
     assert response.status_code == 200, response.text
     data = response.json()
     ids = {"project_id": data["project"]["id"], "run_id": data["run"]["id"]}
-    for endpoint in ["/plan", "/apply", "/model", "/generate"]:
+    for endpoint in ["/plan", "/apply"]:
+        response = client.post(endpoint, json=ids)
+        assert response.status_code == 200, response.text
+    check_quality(client, ids)
+    for endpoint in ["/model", "/generate"]:
         response = client.post(endpoint, json=ids)
         assert response.status_code == 200, response.text
     exported = client.get("/download/excel", params={"run_id": ids["run_id"]})
     assert exported.status_code == 200, exported.text
     workbook = load_workbook(io.BytesIO(exported.content))
-    assert workbook.worksheets[0].max_row == 3
-    assert workbook.worksheets[0]._charts
-    assert workbook.worksheets[0]["A1"].fill.fgColor.rgb.endswith("6D5DF6")
-    assert workbook.worksheets[0]["A2"].value == "=1+1"
-    assert workbook.worksheets[0]["A2"].data_type == "s"
-    assert "Transformation audit" in workbook.sheetnames
+    assert workbook.sheetnames[0] == "Summary"
+    assert workbook.sheetnames[-2:] == ["Charts", "Transformation audit"]
+    data = workbook.worksheets[1]
+    assert data.max_row == 3
+    assert data.tables and not data.auto_filter.ref  # one Excel Table, no clashing filter
+    assert workbook["Charts"]._charts
+    assert data["A1"].fill.fgColor.rgb.endswith("15130F")
+    assert data["A2"].value == "=1+1"
+    assert data["A2"].data_type == "s"
+    assert data["B2"].number_format == "#,##0.00"  # cost is money
+    assert "Quality fixes" in [cell.value for cell in workbook["Summary"]["A"]]
     workbook.close()
     preview = client.get("/preview", params={"run_id": ids["run_id"]}).json()
     assert preview["kpis"][1]["value"] == 30
