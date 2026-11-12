@@ -7,11 +7,11 @@ Python 3.11 · pandas transforms data · validated JSON plans explain decisions 
 1. Profiler, deterministic planner/transformer, at least eight reproducible messy XLSX fixtures, and offline tests. **Complete: 13 offline tests pass across nine fixtures.**
 2. Provider-neutral LiteLLM abstraction, strict LLM planning with one retry and deterministic fallback, credential storage, mocked tests. **Complete: 27 tests pass.**
 3. Minimal refreshable TMDL/PBIR project: one table, one page, card + bar + table. **Generated and JSON-validated; stopped for the user's Power BI Desktop feedback. 44 tests pass.**
-4. Semantic modeler, relationships, and multiple report pages.
+4. Semantic modeler, verified relationships, and multiple report pages. **Complete: 53 tests pass.**
 5. FastAPI and minimal UI: upload, before/after previews, plan overrides, model, generate, download, and settings.
 6. Windows packaging and smoke test: launch `sheetforge.exe`, hit `/health`, shut it down.
 
-Step 3 is an explicit review gate. Steps 4–6 will not be represented as finished before that gate is passed.
+Implementation continues through steps 4–6 at the user’s request. Native Power BI Desktop validation remains pending and is separate from JSON schema validation.
 
 ## Development
 

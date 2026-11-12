@@ -56,7 +56,7 @@ def visual(name, kind, query, title, x, y, width, height):
     }
 
 
-def tmdl_table(name, frame, query, record_column):
+def tmdl_table(name, frame, query, record_column, measure_definitions=None):
     def lineage(key):
         return str(uuid5(NAMESPACE_URL, "sheetforge/" + name + "/" + key))
 
@@ -78,11 +78,15 @@ def tmdl_table(name, frame, query, record_column):
         while measure_name in measures or measure_name in frame.columns:
             measure_name = "Measure " + measure_name
         measures[measure_name] = f"SUM({identifier(name)}[{column.replace(']', ']]')}])"
+    formats = {}
+    if measure_definitions is not None:
+        measures = {item.name: item.dax for item in measure_definitions}
+        formats = {item.name: item.format_string for item in measure_definitions}
     for measure_name, expression in measures.items():
         lines.extend(
             [
                 f"\tmeasure {identifier(measure_name)} = {expression}",
-                "\t\tformatString: #,##0.##",
+                "\t\tformatString: " + property_string(formats.get(measure_name, "#,##0.##")),
                 "\t\tlineageTag: " + lineage("measure/" + measure_name),
                 "",
             ]

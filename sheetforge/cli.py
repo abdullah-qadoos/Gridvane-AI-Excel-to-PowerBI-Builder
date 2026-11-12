@@ -56,11 +56,17 @@ def main(argv=None):
             plan, planning_notes = plan_cleaning(profile, args.sheet)
         result = apply_plan(args.file, plan)
         if args.command == "build":
-            from sheetforge.pbip import build_project
+            from sheetforge.modeler import plan_model
+            from sheetforge.pbip import build_semantic_project
 
-            project, zipped = build_project(result, args.out, args.table)
+            if args.table:
+                if args.table not in result.tables:
+                    raise ValueError("Selected output table does not exist.")
+                result.tables = {args.table: result.tables[args.table]}
+            model_plan, _ = plan_model(result.tables)
+            project, zipped = build_semantic_project(result, args.out, model_plan)
             print(
-                f"Project: {project}\nZIP: {zipped}\nStep 3: open in Power BI Desktop and report any errors before continuing."
+                f"Project: {project}\nZIP: {zipped}\nOpen in Power BI Desktop and select Refresh."
             )
             return 0
         args.out.mkdir(parents=True, exist_ok=True)
