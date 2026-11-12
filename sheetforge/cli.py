@@ -25,6 +25,21 @@ def main(argv=None):
     fix.add_argument(
         "--plan", type=Path, help="Use a reviewed CleaningPlan JSON instead of heuristics."
     )
+    build = commands.add_parser("build", help="Generate the minimal refreshable TMDL/PBIR project.")
+    build.add_argument("file", type=Path)
+    build.add_argument("--out", type=Path, default=Path("output/project"))
+    build.add_argument("--sheet")
+    build.add_argument(
+        "--table", help="Explicit output table to include at the single-table milestone."
+    )
+    build.add_argument(
+        "--provider",
+        choices=["none", "openai", "anthropic", "gemini", "azure", "openrouter", "ollama"],
+        default="none",
+    )
+    build.add_argument("--model", default="")
+    build.add_argument("--base-url")
+    build.add_argument("--plan", type=Path)
     args = parser.parse_args(argv)
     try:
         profile = profile_workbook(args.file)
@@ -32,12 +47,22 @@ def main(argv=None):
         from sheetforge.planner.llm_planner import plan_cleaning
 
         configure(LLMConfig(provider=args.provider, model=args.model, base_url=args.base_url))
-        plan, planning_notes = plan_cleaning(profile, args.sheet)
         if args.plan:
             from sheetforge.contracts import CleaningPlan
 
             plan = CleaningPlan.model_validate_json(args.plan.read_text(encoding="utf-8"))
+            planning_notes = ["Applied the explicitly reviewed CleaningPlan; no LLM call was made."]
+        else:
+            plan, planning_notes = plan_cleaning(profile, args.sheet)
         result = apply_plan(args.file, plan)
+        if args.command == "build":
+            from sheetforge.pbip import build_project
+
+            project, zipped = build_project(result, args.out, args.table)
+            print(
+                f"Project: {project}\nZIP: {zipped}\nStep 3: open in Power BI Desktop and report any errors before continuing."
+            )
+            return 0
         args.out.mkdir(parents=True, exist_ok=True)
         for index, frame in enumerate(result.tables.values(), 1):
             frame.to_csv(args.out / f"table_{index}.csv", index=False, encoding="utf-8")

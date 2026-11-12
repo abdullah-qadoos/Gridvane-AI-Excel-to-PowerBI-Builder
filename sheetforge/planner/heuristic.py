@@ -1,5 +1,7 @@
 """Explainable layout decisions; this module never imports or contacts an LLM."""
 
+import re
+
 from sheetforge.contracts import Bounds, CleaningPlan, TablePlan
 from sheetforge.profiler import read_sheet
 from sheetforge.values import MONTH, TOTAL, blank, date_like, guess_type, number
@@ -31,7 +33,11 @@ def header_names(grid, indexes, merged, bounds, *, transposed=False):
                             rows[output_row][col] = anchor
     names, seen = [], {}
     for col in range(len(grid[0])):
-        parts = list(dict.fromkeys(str(row[col]).strip() for row in rows if not blank(row[col])))
+        parts = list(
+            dict.fromkeys(
+                re.sub(r"\s+", " ", str(row[col]).strip()) for row in rows if not blank(row[col])
+            )
+        )
         base = "_".join(parts) or f"Column_{col + 1}"
         count = seen.get(base, 0) + 1
         seen[base] = count

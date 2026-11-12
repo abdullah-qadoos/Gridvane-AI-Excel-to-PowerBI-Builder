@@ -1312,6 +1312,7 @@ name = "sheetforge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jsonschema" },
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "pydantic" },
@@ -1344,6 +1345,7 @@ validation = [
 requires-dist = [
     { name = "alembic", marker = "extra == 'app'", specifier = ">=1.15,<2" },
     { name = "fastapi", marker = "extra == 'app'", specifier = ">=0.115,<1" },
+    { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "jsonschema", marker = "extra == 'validation'", specifier = ">=4.23,<5" },
     { name = "keyring", marker = "extra == 'llm'", specifier = ">=25,<26" },
     { name = "litellm", marker = "extra == 'llm'", specifier = ">=1.70,<2" },

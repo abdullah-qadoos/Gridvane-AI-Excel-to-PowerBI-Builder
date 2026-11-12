@@ -160,7 +160,15 @@ def apply_plan(path, plan):
             frame[column] = converted
             step(
                 "cast_column",
-                f"Parsed {column} as {kind}; {invalid} invalid value(s) marked missing.",
+                f"Parsed {column} as {kind}"
+                + (
+                    " with currency/unit normalization"
+                    if kind in {"number", "integer"}
+                    else " with whitespace trimming"
+                    if kind == "string"
+                    else ""
+                )
+                + f"; {invalid} invalid value(s) marked missing.",
                 len(frame),
                 len(frame),
                 {"column": column, "type": kind, "invalid": invalid},

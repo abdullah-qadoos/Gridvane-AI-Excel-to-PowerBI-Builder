@@ -6,7 +6,7 @@ Python 3.11 · pandas transforms data · validated JSON plans explain decisions 
 
 1. Profiler, deterministic planner/transformer, at least eight reproducible messy XLSX fixtures, and offline tests. **Complete: 13 offline tests pass across nine fixtures.**
 2. Provider-neutral LiteLLM abstraction, strict LLM planning with one retry and deterministic fallback, credential storage, mocked tests. **Complete: 27 tests pass.**
-3. Minimal refreshable TMDL/PBIR project: one table, one page, card + bar + table. **Stop for the user's Power BI Desktop feedback.**
+3. Minimal refreshable TMDL/PBIR project: one table, one page, card + bar + table. **Generated and JSON-validated; stopped for the user's Power BI Desktop feedback. 44 tests pass.**
 4. Semantic modeler, relationships, and multiple report pages.
 5. FastAPI and minimal UI: upload, before/after previews, plan overrides, model, generate, download, and settings.
 6. Windows packaging and smoke test: launch `sheetforge.exe`, hit `/health`, shut it down.
@@ -18,6 +18,7 @@ Step 3 is an explicit review gate. Steps 4–6 will not be represented as finish
 ```powershell
 uv sync --python 3.11 --extra dev
 uv run sheetforge fix tests/fixtures/header_not_row1.xlsx --out output/cleaned
+uv run sheetforge build tests/fixtures/header_not_row1.xlsx --out output/project
 uv run pytest
 uv run ruff check .
 ```

@@ -1,6 +1,7 @@
 import json
 import sys
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from sheetforge.llm import (
     configure,
     public_config,
 )
+from sheetforge.llm.ollama import discover_ollama
 from sheetforge.planner import heuristic_plan
 from sheetforge.planner.llm_planner import plan_cleaning
 from sheetforge.profiler import profile_workbook
@@ -190,3 +192,23 @@ def test_json_rejects_duplicate_keys_and_nonfinite_numbers():
             client.strict_object(text)
     with pytest.raises(CompletionUnavailable):
         complete("none", [], client.ConnectionReply)
+
+
+def test_ollama_discovery_only_uses_the_local_model_list(monkeypatch):
+    calls = []
+
+    def request(url, timeout):
+        calls.append(url)
+        return BytesIO(b'{"models":[{"name":"local-b"},{"name":"local-a"},{"name":"local-a"}]}')
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: SimpleNamespace(open=request))
+    assert discover_ollama() == {"available": True, "models": ["local-a", "local-b"]}
+    assert calls == ["http://localhost:11434/api/tags"]
+
+
+def test_absent_ollama_is_a_normal_unavailable_result(monkeypatch):
+    def request(*args, **kwargs):
+        raise OSError("not running")
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: SimpleNamespace(open=request))
+    assert discover_ollama() == {"available": False, "models": []}

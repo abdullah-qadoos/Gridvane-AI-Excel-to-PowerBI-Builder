@@ -7,7 +7,7 @@ name = "sheetforge"
 version = "0.1.0"
 description = "Auditable Excel cleaning and refreshable Power BI projects"
 requires-python = ">=3.11,<3.12"
-dependencies = ["pandas>=2.2,<4", "openpyxl>=3.1,<4", "pydantic>=2.8,<3"]
+dependencies = ["pandas>=2.2,<4", "openpyxl>=3.1,<4", "pydantic>=2.8,<3", "jsonschema>=4.23,<5"]
 
 [project.optional-dependencies]
 llm = ["litellm>=1.70,<2", "keyring>=25,<26"]
@@ -23,7 +23,7 @@ sheetforge = "sheetforge.cli:main"
 include = ["sheetforge*"]
 
 [tool.setuptools.package-data]
-sheetforge = ["schemas/**/*.json", "schemas/**/*.md"]
+sheetforge = ["schemas/*.json", "schemas/*.md", "schemas/**/*.json", "schemas/**/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
