@@ -2,7 +2,6 @@ import argparse
 import json
 from pathlib import Path
 
-from sheetforge.planner import heuristic_plan
 from sheetforge.profiler import profile_workbook
 from sheetforge.transformer import apply_plan
 
@@ -17,12 +16,23 @@ def main(argv=None):
     fix.add_argument("--out", type=Path, default=Path("output/cleaned"))
     fix.add_argument("--sheet")
     fix.add_argument(
+        "--provider",
+        choices=["none", "openai", "anthropic", "gemini", "azure", "openrouter", "ollama"],
+        default="none",
+    )
+    fix.add_argument("--model", default="")
+    fix.add_argument("--base-url")
+    fix.add_argument(
         "--plan", type=Path, help="Use a reviewed CleaningPlan JSON instead of heuristics."
     )
     args = parser.parse_args(argv)
     try:
         profile = profile_workbook(args.file)
-        plan = heuristic_plan(profile, args.sheet)
+        from sheetforge.llm import LLMConfig, configure
+        from sheetforge.planner.llm_planner import plan_cleaning
+
+        configure(LLMConfig(provider=args.provider, model=args.model, base_url=args.base_url))
+        plan, planning_notes = plan_cleaning(profile, args.sheet)
         if args.plan:
             from sheetforge.contracts import CleaningPlan
 
@@ -32,6 +42,7 @@ def main(argv=None):
         for index, frame in enumerate(result.tables.values(), 1):
             frame.to_csv(args.out / f"table_{index}.csv", index=False, encoding="utf-8")
         audit = {
+            "planning_notes": planning_notes,
             "profile": profile.to_dict(),
             "plan": plan.model_dump(),
             "steps": [step.model_dump() for step in result.steps],

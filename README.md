@@ -5,7 +5,7 @@ Python 3.11 · pandas transforms data · validated JSON plans explain decisions 
 ## Order of work
 
 1. Profiler, deterministic planner/transformer, at least eight reproducible messy XLSX fixtures, and offline tests. **Complete: 13 offline tests pass across nine fixtures.**
-2. Provider-neutral LiteLLM abstraction, strict LLM planning with one retry and deterministic fallback, credential storage, mocked tests.
+2. Provider-neutral LiteLLM abstraction, strict LLM planning with one retry and deterministic fallback, credential storage, mocked tests. **Complete: 27 tests pass.**
 3. Minimal refreshable TMDL/PBIR project: one table, one page, card + bar + table. **Stop for the user's Power BI Desktop feedback.**
 4. Semantic modeler, relationships, and multiple report pages.
 5. FastAPI and minimal UI: upload, before/after previews, plan overrides, model, generate, download, and settings.
@@ -23,6 +23,20 @@ uv run ruff check .
 ```
 
 With pip, create a Python 3.11 environment and run `pip install -e ".[dev]"`.
+
+## Optional model assistance
+
+```powershell
+uv sync --python 3.11 --extra dev --extra llm --extra validation
+uv run sheetforge fix file.xlsx --provider ollama --model YOUR_LOCAL_MODEL
+uv run sheetforge fix file.xlsx --provider openrouter --model YOUR_MODEL_ID --base-url https://openrouter.ai/api/v1
+```
+
+The default provider is `none`. `sheetforge.llm.complete(system, messages, schema)` returns a validated dictionary. OpenAI, Anthropic, Gemini, Azure, OpenRouter, and Ollama route through LiteLLM using the caller's selected model; no vendor or model is chosen implicitly. Configuration accepts provider, model, an optional secret API key, base URL, and optional Azure API version. `test_connection()` sends no spreadsheet data. Ollama's explicit `discover_ollama()` helper queries only `http://localhost:11434/api/tags`; it never runs automatically in no-AI mode.
+
+Use `store_api_key(config, key)` to store a key under the SheetForge service in Windows Credential Manager (keyring). The resolver checks an explicit in-memory key, the OS vault, then environment variables or the development `.env` fallback. Public configuration excludes keys. Provider exceptions are reduced to safe messages and are never logged with their original contents. JSON must be a single object with distinct keys and finite numbers. A validation failure gets one corrected-JSON attempt with the error; two invalid responses or provider unavailability return the deterministic plan. Source bounds, source columns, and unpivot references are checked before execution.
+
+Only bounded samples/statistics and the proposed plan are sent to the LLM. Transformations remain pandas operations. Mocked tests cover all six requested provider routes, invalid output, correction, fallback, credential handling, and absence of middle-workbook data from prompts. Live provider inference has not been tested with credentials.
 
 ## Cleaning contracts
 
