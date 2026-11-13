@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sheetforge"
-version = "0.1.0"
+version = "0.3.0"
 description = "Auditable Excel cleaning and refreshable Power BI projects"
 requires-python = ">=3.11,<3.12"
 dependencies = ["pandas>=2.2,<4", "openpyxl>=3.1,<4", "pydantic>=2.8,<3", "jsonschema>=4.23,<5"]

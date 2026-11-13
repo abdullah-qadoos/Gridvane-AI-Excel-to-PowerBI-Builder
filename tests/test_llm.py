@@ -212,3 +212,45 @@ def test_absent_ollama_is_a_normal_unavailable_result(monkeypatch):
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_: SimpleNamespace(open=request))
     assert discover_ollama() == {"available": False, "models": []}
+
+
+def test_cli_provider_needs_a_known_tool_and_no_key():
+    with pytest.raises(ValueError, match="supported AI apps"):
+        LLMConfig(provider="cli", model="evil.exe")
+    config_cli = LLMConfig(provider="cli", model="claude")
+    assert config.resolve_api_key(config_cli) is None
+    with pytest.raises(ValueError, match="No key is needed"):
+        config.store_api_key(config_cli, "sk-x")
+
+
+def test_last_json_object_strips_banners_and_fences():
+    noisy = 'Signed in as x\n```json\n{"a": {"b": 1}}\n```\nDone'
+    assert client.last_json_object(noisy) == '{"a": {"b": 1}}'
+    assert client.last_json_object("no braces here") == "no braces here"
+
+
+def test_cli_provider_runs_the_tool_headless(monkeypatch):
+    import shutil
+    import subprocess
+
+    configure(LLMConfig(provider="cli", model="claude"))
+    calls = {}
+
+    def fake_run(argv, **options):
+        calls["argv"], calls["input"] = argv, options["input"]
+        return SimpleNamespace(returncode=0, stdout='Banner line\n{"ok": true}\n', stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: r"C:\fake\claude.exe")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert client.test_connection()["ok"] is True
+    assert calls["argv"][0] == r"C:\fake\claude.exe"
+    assert "--output-format" in calls["argv"] and "connectivity" in calls["input"]
+
+
+def test_cli_provider_missing_tool_is_a_normal_unavailable(monkeypatch):
+    import shutil
+
+    configure(LLMConfig(provider="cli", model="codex"))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(CompletionUnavailable, match="not found"):
+        client.request_completion([{"role": "user", "content": "hi"}])

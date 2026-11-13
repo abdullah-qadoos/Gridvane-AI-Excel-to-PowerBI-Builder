@@ -296,3 +296,16 @@ def test_open_in_power_bi_unpacks_the_project_so_no_zip_is_involved(tmp_path, mo
     assert (folder / "workbook.SemanticModel" / "definition.pbism").is_file()
     assert second["folder"] != first["folder"]  # never overwrites an earlier copy
     assert [Path(path).name for path in opened] == ["workbook.pbip", "workbook.pbip"]
+
+
+def test_cli_detection_and_settings_accept_a_signed_in_app(tmp_path):
+    _, client = client_for(tmp_path / "home")
+    tools = client.get("/settings/clis").json()["tools"]
+    assert {tool["name"] for tool in tools} >= {"claude", "codex", "gemini"}
+    saved = client.post("/settings", json={"provider": "cli", "model": "claude"})
+    assert saved.status_code == 200
+    body = saved.json()
+    assert body["provider"] == "cli" and body["has_key"] is False
+    assert (
+        client.post("/settings", json={"provider": "cli", "model": "evil.exe"}).status_code == 422
+    )

@@ -30,7 +30,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from sheetforge import formulas, quality
 from sheetforge.contracts import AppliedStep, CleaningPlan, Contract
-from sheetforge.llm import LLMConfig, configure, discover_ollama, public_config, store_api_key
+from sheetforge.llm import (
+    LLMConfig,
+    configure,
+    detect_clis,
+    discover_ollama,
+    public_config,
+    store_api_key,
+)
 from sheetforge.llm import test_connection as check_connection
 from sheetforge.llm.config import resolve_api_key
 from sheetforge.logging_setup import register_secret
@@ -825,6 +832,34 @@ def create_app(home=None, shutdown=None):
     @app.get("/settings/ollama")
     def ollama():
         return discover_ollama()
+
+    @app.get("/settings/clis")
+    def clis():
+        return {"tools": detect_clis()}
+
+    @app.get("/settings/update")
+    def update_check():
+        import urllib.request
+
+        from sheetforge import __version__
+
+        request = urllib.request.Request(
+            "https://api.github.com/repos/abdullah-qadoos/"
+            "Gridvane-AI-Excel-to-PowerBI-Builder/releases/latest",
+            headers={"User-Agent": "pivotra-update-check", "Accept": "application/vnd.github+json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=6) as response:
+                latest = json.loads(response.read(65536))
+        except Exception:
+            raise HTTPException(502, "Could not reach GitHub to check for updates.") from None
+        tag = str(latest.get("tag_name", "")).lstrip("v")
+        return {
+            "current": __version__,
+            "latest": tag,
+            "url": str(latest.get("html_url", "")),
+            "newer": tag != __version__ and bool(tag),
+        }
 
     @app.post("/shutdown")
     def stop():

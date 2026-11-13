@@ -74,7 +74,11 @@ $('apply-formulas').addEventListener('click',()=>task('Saving the fixed copy…'
 /* ---------- designer state ---------- */
 function design(){try{const value=JSON.parse($('model-json').value);return value&&Array.isArray(value.pages)?value:null;}catch{return null;}}
 function designDirty(){const saved=run?.model_plan_json;if(!saved)return false;try{return pretty(JSON.parse(saved))!==$('model-json').value;}catch{return true;}}
-function editDesign(change){const value=design();if(!value)return;change(value);$('model-json').value=pretty(value);renderModel();controls();}
+const history={past:[],future:[]};
+function snapshot(){history.past.push($('model-json').value);if(history.past.length>50)history.past.shift();history.future=[];}
+function restore(from,to){if(!from.length||busy)return;to.push($('model-json').value);$('model-json').value=from.pop();selected=null;renderModel();controls();}
+document.addEventListener('keydown',event=>{if(!(event.ctrlKey||event.metaKey)||!design())return;if(event.target instanceof Element&&event.target.closest('input,textarea,select'))return;const key=event.key.toLowerCase();if(key==='z'&&!event.shiftKey)restore(history.past,history.future);else if(key==='y'||(key==='z'&&event.shiftKey))restore(history.future,history.past);else return;event.preventDefault();});
+function editDesign(change){const value=design();if(!value)return;snapshot();change(value);$('model-json').value=pretty(value);renderModel();controls();}
 function currentVisuals(){return design()?.pages[designPage]?.visuals||[];}
 async function saveDesign(){
   const value=design();if(!value)throw new Error('Build a project first.');
@@ -310,11 +314,11 @@ $('add-visual').addEventListener('click',addVisual);
 $('picture-input').addEventListener('change',event=>{const file=event.target.files[0];event.target.value='';if(!file)return;
   if(!/^image\/(png|jpeg)$/.test(file.type)){notice('Choose a PNG or JPG picture.',true);return;}if(file.size>5*1024*1024){notice('Choose a picture under 5 MB.',true);return;}
   task('Adding your picture\u2026',async()=>{const result=await json('/design/image?project_id='+project.id,file);editDesign(value=>{const page=value.pages[designPage];page.image=result.name;page.transparency=page.transparency||20;});return 'Picture added. Boxes are slightly see-through so it shows; change that under the page settings.';});});
-$('design-ai').addEventListener('click',()=>task('Designing your report\u2026',async()=>{const result=await json('/design/suggest',{...ids(),model_plan:design(),privacy:privacy()});$('model-json').value=pretty(result.model_plan);selected=null;designPage=0;renderModel();controls();return (result.notes||[]).join(' ')+' Review it, then select Save design.';}));
+$('design-ai').addEventListener('click',()=>task('Designing your report\u2026',async()=>{snapshot();const result=await json('/design/suggest',{...ids(),model_plan:design(),privacy:privacy()});$('model-json').value=pretty(result.model_plan);selected=null;designPage=0;renderModel();controls();return (result.notes||[]).join(' ')+' Review it, then select Save design.';}));
 $('design-theme').addEventListener('change',()=>editDesign(value=>{value.theme=$('design-theme').value;}));
 $('design-save').addEventListener('click',()=>task('Saving your design…',async()=>{await saveDesign();return 'Design saved. Open it in Power BI or download the ZIP below.';}));
 $('design-arrange').addEventListener('click',()=>task('Arranging this page…',async()=>{
-  const value=design();for(const visual of value.pages[designPage].visuals){delete visual.x;delete visual.y;delete visual.w;delete visual.h;}
+  snapshot();const value=design();for(const visual of value.pages[designPage].visuals){delete visual.x;delete visual.y;delete visual.w;delete visual.h;}
   const modeled=await json('/model',{...ids(),model_plan:value,privacy:privacy()});run=modeled.run;$('model-json').value=pretty(modeled.model_plan);selected=null;renderModel();await refreshRuns();
 }));
 showTab(preference('tab')||'clean');

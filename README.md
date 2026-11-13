@@ -1,17 +1,24 @@
-# Pivotra
+# Pivotra — messy Excel to a finished Power BI report
 
-Python 3.11 · pandas transforms data · validated JSON plans explain decisions · no-AI mode works offline.
+Pivotra is a free, portable Windows app. Drop in a messy `.xlsx` or `.csv` and it walks you through three steps:
 
-## Order of work
+1. **Clean the data** — it finds the real table, fixes headers, types and totals, and shows the before/after with every step explained.
+2. **Repair the formulas** — typed-in totals become real `SUM` formulas, broken `#REF!`/`#NAME?` formulas are rebuilt, and hardcoded numbers move to a proper Inputs sheet. You review each fix before it is applied to a new copy.
+3. **Design the Power BI report** — a drag-and-drop canvas with 46 visual types, 12 color themes, per-visual colors, page backgrounds and background pictures. It generates a native PBIP project you open directly in Power BI Desktop.
 
-1. Profiler, deterministic planner/transformer, at least eight reproducible messy XLSX fixtures, and offline tests. **Complete: 13 offline tests pass across nine fixtures.**
-2. Provider-neutral LiteLLM abstraction, strict LLM planning with one retry and deterministic fallback, credential storage, mocked tests. **Complete: 27 tests pass.**
-3. Minimal refreshable TMDL/PBIR project: one table, one page, card + bar + table. **Generated and JSON-validated; stopped for the user's Power BI Desktop feedback. 44 tests pass.**
-4. Semantic modeler, verified relationships, and multiple report pages. **Complete: 53 tests pass.**
-5. FastAPI and minimal UI: upload, before/after previews, plan overrides, model, generate, download, and settings. **Complete: 62 tests pass.**
-6. Windows packaging and smoke test: launch `pivotra.exe`, hit `/health`, shut it down. **Complete: the built executable passed runtime imports, end-to-end generation, restart persistence, health and shutdown checks.**
+## Download
 
-Steps 4–6 are implemented. Native Power BI Desktop validation remains pending and is separate from JSON schema validation.
+Get `pivotra-windows-x64.zip` from [Releases](../../releases), extract the whole folder, and double-click `pivotra.exe`. No install, no admin rights, and the core app works fully offline. Windows SmartScreen may warn because the app is not code-signed yet — choose **More info → Run anyway**.
+
+Opening the generated report needs [Power BI Desktop](https://aka.ms/pbidesktop) with the **Power BI Project (.pbip)** preview feature enabled (File → Options → Preview features). Map visuals also need File → Options → Security → allow map visuals.
+
+## AI is optional — use the subscription you already pay for
+
+Everything works offline with no AI at all. For smarter cleaning and the one-click **Design it for me**, pick **My AI subscription** in the provider settings: Pivotra detects AI apps already installed and signed in on your PC — **Claude Code** (Claude plan), **Codex** (ChatGPT plan), **Gemini CLI**, **Cursor**, **Antigravity**, **GitHub Copilot** — and runs the one you choose invisibly in the background, so your existing plan pays and no API key is needed. You can also bring an API key (OpenAI, Anthropic, Gemini, Azure, OpenRouter) or run a local Ollama model. Privacy modes control what may ever be shared: at most column names, statistics and a bounded 20+5-row sample — never your whole workbook.
+
+---
+
+The sections below are technical notes for contributors.
 
 ## Development
 

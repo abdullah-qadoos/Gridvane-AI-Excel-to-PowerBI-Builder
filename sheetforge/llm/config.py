@@ -10,11 +10,31 @@ from pydantic import Field, SecretStr, model_validator
 
 from sheetforge.contracts import Contract
 
+# Signed-in AI apps Pivotra can run invisibly so the user's existing subscription pays.
+# Args are fixed; "{prompt}" marks arg-mode tools, the rest read the prompt from stdin.
+CLI_TOOLS = {
+    "claude": ("Claude Code", ["-p", "--output-format", "text"]),
+    "codex": ("Codex", ["exec", "--skip-git-repo-check", "-"]),
+    "cursor-agent": ("Cursor", ["-p", "--output-format", "text", "--mode", "ask"]),
+    "agy": ("Antigravity", ["-p", "{prompt}", "--output-format", "text"]),
+    "gemini": ("Gemini CLI", ["-p", "{prompt}"]),
+    "copilot": ("GitHub Copilot", ["-p", "{prompt}"]),
+}
+
+
+def detect_clis():
+    import shutil
+
+    return [
+        {"name": name, "label": label, "available": shutil.which(name) is not None}
+        for name, (label, _) in CLI_TOOLS.items()
+    ]
+
 
 class LLMConfig(Contract):
-    provider: Literal["none", "openai", "anthropic", "gemini", "azure", "openrouter", "ollama"] = (
-        "none"
-    )
+    provider: Literal[
+        "none", "openai", "anthropic", "gemini", "azure", "openrouter", "ollama", "cli"
+    ] = "none"
     model: str = Field(default="", max_length=200)
     api_key: SecretStr | None = Field(default=None, exclude=True)
     base_url: str | None = None
@@ -24,6 +44,8 @@ class LLMConfig(Contract):
     def valid_endpoint(self):
         if self.provider != "none" and not self.model.strip():
             raise ValueError("Choose a model ID when enabling a provider.")
+        if self.provider == "cli" and self.model not in CLI_TOOLS:
+            raise ValueError("Choose one of the supported AI apps: " + ", ".join(CLI_TOOLS) + ".")
         if self.base_url:
             url = urlsplit(self.base_url)
             if (
@@ -76,8 +98,8 @@ def vault():
 
 
 def store_api_key(config, key):
-    if config.provider in {"none", "ollama"}:
-        raise ValueError("No key is needed for no-AI mode or local Ollama.")
+    if config.provider in {"none", "ollama", "cli"}:
+        raise ValueError("No key is needed for no-AI mode, local Ollama, or a signed-in AI app.")
     try:
         vault().set_password("SheetForge", credential_id(config), key)
     except Exception:
@@ -87,7 +109,7 @@ def store_api_key(config, key):
 def resolve_api_key(config):
     if config.api_key:
         return config.api_key.get_secret_value()
-    if config.provider in {"none", "ollama"}:
+    if config.provider in {"none", "ollama", "cli"}:
         return None
     try:
         saved = vault().get_password("SheetForge", credential_id(config))

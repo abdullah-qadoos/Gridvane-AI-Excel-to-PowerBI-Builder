@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import ValidationError
 
 from sheetforge.contracts import Contract
-from sheetforge.llm.config import LLMConfig, dotenv_values, resolve_api_key
+from sheetforge.llm.config import CLI_TOOLS, LLMConfig, dotenv_values, resolve_api_key
 
 _config = LLMConfig()
 
@@ -29,9 +29,59 @@ def enabled():
     return _config.provider != "none"
 
 
+def last_json_object(text):
+    """The reply with any CLI banners or code fences stripped: the last balanced {...} block."""
+    # shortcut: brace counting ignores braces inside JSON strings; the two-attempt retry covers it.
+    end = text.rfind("}")
+    depth = 0
+    for i in range(end, -1, -1):
+        depth += {"}": 1, "{": -1}.get(text[i], 0)
+        if text[i] == "{" and depth == 0:
+            return text[i : end + 1]
+    return text
+
+
+def run_cli(messages):
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+
+    label, args = CLI_TOOLS[_config.model]
+    exe = shutil.which(_config.model)
+    if not exe:
+        raise CompletionUnavailable(
+            label + " was not found on this computer. Install it, sign in once, and try again."
+        )
+    prompt = "\n\n".join(
+        {"assistant": "Your previous reply:\n"}.get(m["role"], "") + m["content"] for m in messages
+    )
+    try:
+        done = subprocess.run(
+            [exe, *(a.replace("{prompt}", prompt) for a in args)],
+            input=None if any("{prompt}" in a for a in args) else prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=240,
+            cwd=tempfile.gettempdir(),  # a neutral folder: no project files for the agent to read
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise CompletionUnavailable(label + " did not answer in time.") from None
+    if done.returncode != 0 or not done.stdout.strip():
+        raise CompletionUnavailable(
+            label + " could not answer. Open it once in a terminal to check you are signed in."
+        )
+    return last_json_object(done.stdout)
+
+
 def request_completion(messages):
     # Import lazily: offline/no-AI use never imports LiteLLM or attempts model discovery.
     try:
+        if _config.provider == "cli":
+            return run_cli(messages)
         key = resolve_api_key(_config)
         if _config.provider != "ollama" and not key:
             raise CompletionUnavailable("No provider key is configured.")
