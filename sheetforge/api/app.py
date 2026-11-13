@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import secrets
 from pathlib import Path
 from threading import RLock
@@ -27,13 +28,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from sheetforge import quality
+from sheetforge import formulas, quality
 from sheetforge.contracts import AppliedStep, CleaningPlan, Contract
 from sheetforge.llm import LLMConfig, configure, discover_ollama, public_config, store_api_key
 from sheetforge.llm import test_connection as check_connection
 from sheetforge.llm.config import resolve_api_key
 from sheetforge.logging_setup import register_secret
 from sheetforge.modeler import plan_model, validate_model
+from sheetforge.modeler.design import suggest_design
+from sheetforge.modeler.planning import IMAGE
+from sheetforge.modeler.visuals import catalogue
 from sheetforge.paths import data_home, output_stem, resource_path
 from sheetforge.pbip import build_semantic_project
 from sheetforge.planner.llm_planner import plan_cleaning
@@ -43,6 +47,7 @@ from sheetforge.storage import Repository
 from sheetforge.transformer import TransformResult, apply_plan, cast_table
 
 MAX_UPLOAD = 8 * 1024 * 1024
+MAX_IMAGE = 5 * 1024 * 1024
 LOG = logging.getLogger("sheetforge.api")
 
 
@@ -69,6 +74,22 @@ class QualityRequest(RunRequest):
 
 QUALITY_READY = {"applied", "checked", "needs_fix", "modeled", "generated"}
 CLEANED = QUALITY_READY
+
+
+class FormulaScanRequest(Contract):
+    project_id: str
+    privacy: Literal["local", "masked", "sample"] = "local"
+
+
+class FormulaApplyRequest(Contract):
+    project_id: str
+    # Accepted fix ids; the value renames a hardcoded input (None keeps the suggested name).
+    accepted: dict[str, str | None]
+
+
+class DesignRequest(RunRequest):
+    model_plan: dict | None = None
+    privacy: Literal["local", "masked", "sample"] = "local"
 
 
 class ModelRequest(RunRequest):
@@ -557,7 +578,7 @@ def create_app(home=None, shutdown=None):
     def model(body: ModelRequest):
         with app.state.pipeline_lock:
             item = run_for(body)
-            if item["status"] not in {"checked", "modeled"}:
+            if item["status"] not in {"checked", "modeled", "generated"}:
                 raise HTTPException(409, "Finish the quality check before modeling.")
             result = load_result(item)
             require_same_source(item, result.source)
@@ -595,7 +616,11 @@ def create_app(home=None, shutdown=None):
             try:
                 output = run_dir(item) / ("powerbi-" + uuid4().hex[:8])
                 _, zipped = build_semantic_project(
-                    result, output, json.loads(item["model_plan_json"]), name=source_name(item)
+                    result,
+                    output,
+                    json.loads(item["model_plan_json"]),
+                    name=source_name(item),
+                    images=image_dir(item["project_id"]),
                 )
                 item = repo.update_run(item["id"], status="generated", output_path=str(zipped))
                 LOG.info("PBIP generated; run=%s", item["id"])
@@ -674,6 +699,92 @@ def create_app(home=None, shutdown=None):
                 filename=download_name(item, "-cleaned.xlsx"),
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+    def image_dir(project_id):
+        return home / "projects" / project(project_id)["id"] / "images"
+
+    @app.post("/design/image")
+    async def upload_image(request: Request, project_id: str):
+        content, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_IMAGE:
+                raise HTTPException(413, "Choose a picture under 5 MB.")
+            content.append(chunk)
+        data = b"".join(content)
+        # Trust the bytes, not the file name: only real PNG and JPEG pictures are kept.
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            suffix = ".png"
+        elif data.startswith(b"\xff\xd8\xff"):
+            suffix = ".jpg"
+        else:
+            raise ValueError("Choose a PNG or JPG picture.")
+        folder = image_dir(project_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        name = hashlib.sha256(data).hexdigest()[:16] + suffix
+        (folder / name).write_bytes(data)
+        return {"name": name}
+
+    @app.get("/design/image")
+    def get_image(project_id: str, name: str):
+        if not re.fullmatch(IMAGE, name) or not (image_dir(project_id) / name).is_file():
+            raise HTTPException(404, "Picture not found.")
+        media = "image/png" if name.endswith(".png") else "image/jpeg"
+        return FileResponse(image_dir(project_id) / name, media_type=media)
+
+    @app.post("/design/suggest")
+    def design_suggest(body: DesignRequest):
+        item = run_for(body)
+        if item["status"] not in {"checked", "modeled", "generated"} or not item["model_plan_json"]:
+            raise HTTPException(409, "Build the report before asking for a design.")
+        result = load_result(item)
+        register_secret(resolve_api_key(app.state.llm_config))
+        plan, notes = suggest_design(
+            body.model_plan or json.loads(item["model_plan_json"]),
+            result.tables,
+            use_ai=body.privacy != "local" or app.state.llm_config.provider == "ollama",
+        )
+        return {"model_plan": plan.model_dump(), "notes": notes}
+
+    @app.get("/visuals")
+    def visuals():
+        return catalogue()
+
+    def formula_files(project_id):
+        item = project(project_id)
+        folder = home / "projects" / item["id"]
+        return item, folder / "formulas.json", folder / "formulas-fixed.xlsx"
+
+    @app.post("/formulas/scan")
+    def formulas_scan(body: FormulaScanRequest):
+        item, saved, _ = formula_files(body.project_id)
+        register_secret(resolve_api_key(app.state.llm_config))
+        result = formulas.improve(
+            formulas.scan(item["source_path"]),
+            use_ai=body.privacy != "local" or app.state.llm_config.provider == "ollama",
+        )
+        write_json(saved, result.model_dump())
+        return result.model_dump()
+
+    @app.post("/formulas/apply")
+    def formulas_apply(body: FormulaApplyRequest):
+        item, saved, target = formula_files(body.project_id)
+        if not saved.exists():
+            raise HTTPException(409, "Scan the formulas first.")
+        result = formulas.FormulaScan.model_validate(read_json(saved))
+        _, count = formulas.apply_fixes(item["source_path"], result, body.accepted, target)
+        return {"applied": count, "download": "/download/formulas?project_id=" + item["id"]}
+
+    @app.get("/download/formulas")
+    def download_formulas(project_id: str):
+        item, _, target = formula_files(project_id)
+        if not target.exists():
+            raise HTTPException(404, "Apply some formula fixes first.")
+        return FileResponse(
+            target,
+            filename=output_stem(item["name"]) + "-formulas-fixed.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     @app.get("/samples/{name}")
     def sample(name: str):

@@ -9,6 +9,12 @@ from pydantic import Field, model_validator
 
 from sheetforge.contracts import Contract
 from sheetforge.llm.client import CompletionUnavailable, complete, enabled
+from sheetforge.modeler.visuals import THEMES, VISUALS, required
+
+HEADER, MARGIN, GAP, WIDTH, HEIGHT = 64, 24, 16, 1280, 720
+COLOR = r"^#[0-9A-Fa-f]{6}$"
+# Uploaded page pictures are stored under content-hash names, never user-chosen paths.
+IMAGE = r"^[0-9a-f]{16}\.(?:png|jpg)$"
 
 AVERAGED = re.compile(
     r"percent|pct|%|rate|utili[sz]ation|ratio|score|average|avg|mean|price|unit cost", re.I
@@ -40,18 +46,31 @@ class Measure(Contract):
 
 
 class SuggestedVisual(Contract):
-    kind: Literal["card", "bar", "line", "table", "donut", "slicer"]
+    kind: Literal[tuple(VISUALS)]
     table: str
     title: str
     measure: str | None = None
+    measure2: str | None = None
     category: str | None = None
     columns: list[str] = Field(default_factory=list, max_length=256)
+    # Position on the 1280x720 page, set by the designer or filled in by the auto layout.
+    x: int | None = None
+    y: int | None = None
+    w: int | None = None
+    h: int | None = None
+    color: str | None = Field(default=None, pattern=COLOR)
+    background: str | None = Field(default=None, pattern=COLOR)
 
 
 class ReportPage(Contract):
     name: str
     title: str
-    visuals: list[SuggestedVisual] = Field(min_length=1, max_length=8)
+    visuals: list[SuggestedVisual] = Field(min_length=1, max_length=30)
+    background: str | None = Field(default=None, pattern=COLOR)
+    image: str | None = Field(default=None, pattern=IMAGE)
+    image_fit: Literal["Fit", "Fill", "Normal"] = "Fit"
+    # Lets a background picture show through the visual boxes (percent).
+    transparency: int = Field(default=0, ge=0, le=90)
 
 
 class SemanticModelPlan(Contract):
@@ -60,6 +79,68 @@ class SemanticModelPlan(Contract):
     # Each of 32 supported tables can have 256 numeric columns plus a row count.
     measures: list[Measure] = Field(min_length=1, max_length=32 * 257)
     pages: list[ReportPage] = Field(min_length=1, max_length=33)
+    theme: Literal[tuple(THEMES)] = "pivotra"
+
+
+TOP = {
+    "card",
+    "multi_card",
+    "kpi",
+    "gauge",
+    "slicer",
+    "button_slicer",
+    "list_slicer",
+    "text_slicer",
+}
+TREND = {"line", "area", "area_stacked", "combo", "combo_stacked", "ribbon"}
+GRID = {"table", "matrix"}
+
+
+def layout(specs):
+    """Dashboard grid: KPI cards on top, wide trends, side-by-side breakdowns, table last."""
+    geometry = [None] * len(specs)
+    inner = WIDTH - 2 * MARGIN
+    group = {i: "card" if s.kind in TOP else "line" if s.kind in TREND else "table" if s.kind in GRID else "bar" for i, s in enumerate(specs)}  # fmt: skip
+    kinds = {
+        name: [i for i in group if group[i] == name] for name in ["card", "line", "bar", "table"]
+    }
+    weight = {"line": 1.3, "bar": 1.0, "table": 1.0}
+    rows = [
+        (kind, kinds[kind][start : start + 3])
+        for kind in ["line", "bar", "table"]
+        for start in range(0, len(kinds[kind]), 3)
+    ]
+
+    def place(indexes, y, height):
+        width = (inner - GAP * (len(indexes) - 1)) / len(indexes)
+        for slot, index in enumerate(indexes):
+            geometry[index] = (
+                round(MARGIN + slot * (width + GAP)),
+                round(y),
+                round(width),
+                round(height),
+            )
+
+    y = HEADER + MARGIN
+    card_rows = range(0, len(kinds["card"]), 6)
+    height = (
+        110 if rows else (HEIGHT - MARGIN - y - GAP * (len(card_rows) - 1)) / max(1, len(card_rows))
+    )
+    for start in card_rows:
+        place(kinds["card"][start : start + 6], y, height)
+        y += height + GAP
+    if rows:
+        available = HEIGHT - MARGIN - y - GAP * (len(rows) - 1)
+        total = sum(weight[kind] for kind, _ in rows)
+        for kind, indexes in rows:
+            height = max(40, available * weight[kind] / total)
+            place(indexes, y, height)
+            y += height + GAP
+    return geometry
+
+
+def placed(visual):
+    return None not in (visual.x, visual.y, visual.w, visual.h)
 
 
 def quoted(value):
@@ -197,36 +278,55 @@ def validate_model(plan, tables):
         raise ValueError("Report page names must be unique.")
     for page in plan.pages:
         for visual in page.visuals:
+            label = VISUALS[visual.kind][1]
             if visual.table not in tables or not set(visual.columns) <= set(
                 tables[visual.table].columns
             ):
                 raise ValueError("A visual references an unavailable table or column.")
-            if visual.kind == "slicer" and visual.category is None:
-                raise ValueError("Slicers need a column to filter by.")
-            if visual.kind not in {"table", "slicer"} and visual.measure not in measures:
+            needs = required(visual.kind)
+            if "category" in needs and visual.category is None:
+                raise ValueError(f"The {label} visual “{visual.title}” needs a Group by column.")
+            if "measure" in needs and visual.measure is None:
+                raise ValueError(f"The {label} visual “{visual.title}” needs a value.")
+            used = [m for m in (visual.measure, visual.measure2) if m is not None]
+            if any(m not in measures for m in used):
                 raise ValueError("Charts/cards need an available measure.")
-            if visual.kind == "donut" and visual.category is None:
-                raise ValueError("Donut charts need a category column.")
-            if (
-                visual.kind in {"bar", "line", "donut"}
-                and measures[visual.measure].table != visual.table
-            ):
+            if visual.category is not None and visual.category not in tables[visual.table]:
+                raise ValueError("Chart category column is unavailable.")
+            if visual.category is not None:
                 reachable, pending = set(), [visual.table]
                 while pending:
                     name = pending.pop()
                     if name not in reachable:
                         reachable.add(name)
                         pending.extend(graph.get(name, set()))
-                if measures[visual.measure].table not in reachable:
+                if any(measures[m].table not in reachable for m in used):
                     raise ValueError("Chart category cannot filter the measure's table.")
-            if visual.category is not None and visual.category not in tables[visual.table]:
-                raise ValueError("Chart category column is unavailable.")
-            if visual.kind == "line" and (
-                visual.category is None
-                or not pd.api.types.is_datetime64_any_dtype(tables[visual.table][visual.category])
+            box = (visual.x, visual.y, visual.w, visual.h)
+            if any(v is not None for v in box) and not (
+                placed(visual)
+                and 0 <= visual.x
+                and HEADER <= visual.y
+                and visual.w >= 40
+                and visual.h >= 40
+                and visual.x + visual.w <= WIDTH
+                and visual.y + visual.h <= HEIGHT
             ):
-                raise ValueError("Line charts require a date category.")
-    return plan
+                raise ValueError(f"“{visual.title}” does not fit on the page.")
+    # Pages without a full hand-made arrangement get the automatic dashboard layout.
+    pages = []
+    for page in plan.pages:
+        if not all(placed(v) for v in page.visuals):
+            page = page.model_copy(
+                update={
+                    "visuals": [
+                        v.model_copy(update=dict(zip("xywh", box, strict=True)))
+                        for v, box in zip(page.visuals, layout(page.visuals), strict=True)
+                    ]
+                }
+            )
+        pages.append(page)
+    return plan.model_copy(update={"pages": pages})
 
 
 def heuristic_model(tables):
@@ -331,15 +431,16 @@ def heuristic_model(tables):
                     category=date,
                 )
             )
-        charts.append(
-            SuggestedVisual(
-                kind="bar",
-                table=name,
-                title=f"{primary} by {category}" if category else primary,
-                measure=primary,
-                category=category,
+        if category:  # a bar per raw record is unreadable, so no grouping means no bar chart
+            charts.append(
+                SuggestedVisual(
+                    kind="bar",
+                    table=name,
+                    title=f"{primary} by {category}",
+                    measure=primary,
+                    category=category,
+                )
             )
-        )
         if donut:
             charts.append(
                 SuggestedVisual(

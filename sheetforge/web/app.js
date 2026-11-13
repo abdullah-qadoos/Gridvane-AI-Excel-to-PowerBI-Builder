@@ -28,7 +28,7 @@ function controls(){
   $('apply-quality').disabled=busy||!qualityReady();$('check-quality').disabled=busy||!run||!cleanedReady&&run.status!=='planned';
   for(const id of ['download-quality','download-quality-excel'])$(id).disabled=busy||!cleanedReady;
   $('make-model').disabled=busy||!ready;$('review-model').disabled=busy||!ready||!$('model-json').value;
-  $('generate').disabled=busy||run?.status!=='modeled';$('download').disabled=busy||run?.status!=='generated';$('open-powerbi').disabled=busy||run?.status!=='generated';$('download-excel').disabled=busy||!cleanedReady;
+  const saved=['modeled','generated'].includes(run?.status);$('download').disabled=busy||!saved;$('open-powerbi').disabled=busy||!saved;if(typeof studioControls==='function')studioControls();$('download-excel').disabled=busy||!cleanedReady;
   $('run-status').textContent=run?.status || 'Uploaded';document.body.setAttribute('aria-busy',String(busy));
 }
 async function task(message,work){if(busy)return;busy=true;controls();notice(message);try{notice((await work())||'');}catch(error){notice(error.message,true);if($('settings').open)$('settings-notice').textContent=error.message;}finally{busy=false;controls();}}
@@ -88,12 +88,12 @@ function renderModel(){
     const box=el('div',null,'model-waiting');
     if(run?.status==='needs_fix')box.append(el('strong','Paused at the data quality check'),el('p','You chose to fix some issues yourself. Fix your file and upload it again to continue.','helper'));
     else if(quality&&!CHECKED_STATES.includes(run?.status)){
-      const go=el('button','Go to data quality','secondary');go.type='button';go.addEventListener('click',()=>$('quality-panel').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'}));
+      const go=el('button','Go to data quality','secondary');go.type='button';go.addEventListener('click',()=>{showTab('clean');$('quality-panel').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'});});
       const text=el('div');text.append(el('strong','Waiting for your data quality choices'),el('p','Choose what to do with each data quality issue above, then select Apply and continue. Your Power BI report is built right after.','helper'));
       box.append(text,go);
     }
     else box.append(el('p','Build a project to see what your report will contain.','helper'));
-    target.append(box);return;
+    target.append(box);if(typeof renderDesign==='function')renderDesign();return;
   }
   const single=model.tables.length===1,short=name=>single?name.replace(/^.*? \u00b7 /,''):name;
   const group=(title,hint,cls)=>{const box=el('section',null,'model-group '+(cls||''));box.append(el('h3',title),el('p',hint,'helper'));target.append(box);return box;};
@@ -121,11 +121,12 @@ function renderModel(){
     item(pages,page.title,Object.entries(counts).map(([kind,n])=>n+' '+(words[kind]||[kind,kind])[n===1?0:1]).join(', '));
   }
   const left=el('div',null,'model-side');left.append(numbers);target.prepend(left);
+  if(typeof renderDesign==='function')renderDesign();
 }
 async function refreshProjects(){const data=await json('/projects');$('project-list').replaceChildren(...data.projects.map(item=>{const button=el('button',null,'project-item');button.append(el('strong',item.name),el('small',new Date(item.created_at).toLocaleDateString()));button.addEventListener('click',()=>task('Opening project…',async()=>{await openProject(item);$('projects').close();}));return button;}));if(!data.projects.length)$('project-list').append(el('p','Your saved projects will appear here.','helper'));return data.projects;}
 async function refreshRuns(){const data=await json('/runs?project_id='+project.id);$('run-select').replaceChildren(...data.runs.map(item=>new Option(new Date(item.created_at).toLocaleString()+' · '+item.status,item.id)));if(run)$('run-select').value=run.id;return data.runs;}
 async function setRun(item){run=item;$('cleaning-json').value=item?.cleaning_plan_json?pretty(JSON.parse(item.cleaning_plan_json)):'';$('model-json').value=item?.model_plan_json?pretty(JSON.parse(item.model_plan_json)):'';after(item?await json('/preview?run_id='+item.id):{});loadQuality(item?await json('/quality?run_id='+item.id):null);$('quality-stop').hidden=item?.status!=='needs_fix';renderPlan();renderModel();}
-async function openProject(item){project=item;preference('project',item.id);profile=await json('/profile?project_id='+item.id);document.body.classList.add('has-project');$('empty').hidden=true;$('workspace').hidden=false;$('project-name').textContent=item.name;if(!pendingFile){$('file-placeholder').textContent=item.name;$('file-caption').textContent='Your saved workbook is ready to build again.';}$('source-description').textContent='Refresh source: '+item.source_path;$('sheet').replaceChildren(new Option('All worksheets',''),...Object.keys(profile.sheets).map(name=>new Option(name,name)));before();await setRun((await refreshRuns())[0]||null);await refreshProjects();}
+async function openProject(item){project=item;if(typeof resetFormulas==='function')resetFormulas();preference('project',item.id);profile=await json('/profile?project_id='+item.id);document.body.classList.add('has-project');$('empty').hidden=true;$('workspace').hidden=false;$('project-name').textContent=item.name;if(!pendingFile){$('file-placeholder').textContent=item.name;$('file-caption').textContent='Your saved workbook is ready to build again.';}$('source-description').textContent='Refresh source: '+item.source_path;$('sheet').replaceChildren(new Option('All worksheets',''),...Object.keys(profile.sheets).map(name=>new Option(name,name)));before();await setRun((await refreshRuns())[0]||null);await refreshProjects();}
 function selectFile(file){if(!/\.(xlsx|csv)$/i.test(file.name))throw new Error('Choose an .xlsx or .csv file.');if(file.size>8*1024*1024)throw new Error('Choose a file under 8 MB.');pendingFile=file;$('file-placeholder').textContent=file.name;$('file-caption').textContent='Ready when you are. Review your privacy mode, then build.';controls();}
 $('drop-zone').addEventListener('click',()=>$('upload').click());$('upload').addEventListener('change',event=>{try{if(event.target.files[0])selectFile(event.target.files[0]);notice('');}catch(error){notice(error.message,true);}event.target.value='';});
 for(const name of ['dragenter','dragover'])$('drop-zone').addEventListener(name,event=>{event.preventDefault();if(!busy)$('drop-zone').classList.add('drag-over');});
@@ -201,10 +202,9 @@ $('make-plan').addEventListener('click',()=>task('Suggesting a cleaning plan…'
 $('apply-plan').addEventListener('click',()=>task('Re-running your reviewed steps…',async()=>{await applyReviewed();if(!await qualityGate())return QMSG;await modelAndGenerate();}));
 $('make-model').addEventListener('click',()=>task('Suggesting a model…',async()=>{await ensureApplied();const result=await json('/model',{...ids(),privacy:privacy()});run=result.run;$('model-json').value=pretty(result.model_plan);renderModel();await refreshRuns();}));
 $('review-model').addEventListener('click',()=>task('Validating your edited model…',async()=>{const edited=JSON.parse($('model-json').value);await ensureApplied();run=(await json('/model',{...ids(),model_plan:edited,privacy:privacy()})).run;renderModel();await refreshRuns();}));
-$('generate').addEventListener('click',()=>task('Generating the reviewed project…',async()=>{run=(await json('/model',{...ids(),model_plan:JSON.parse($('model-json').value),privacy:privacy()})).run;run=(await json('/generate',ids())).run;await refreshRuns();}));
 function attachmentName(response,fallback){const header=response.headers.get('content-disposition')||'',encoded=/filename\*=UTF-8''([^;]+)/i.exec(header),plain=/filename="([^"]+)"/i.exec(header);try{if(encoded)return decodeURIComponent(encoded[1]);}catch{}return plain?plain[1]:fallback;}
 async function download(path,filename){const response=await api(path);filename=attachmentName(response,filename);const url=URL.createObjectURL(await response.blob()),link=el('a');link.href=url;link.download=filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
-$('download').addEventListener('click',()=>task('Preparing Power BI download…',()=>download('/download?run_id='+run.id,'Pivotra-powerbi.zip')));$('download-excel').addEventListener('click',()=>task('Preparing your cleaned workbook…',()=>download('/download/excel?run_id='+run.id,'Pivotra-cleaned.xlsx')));
+$('download').addEventListener('click',()=>task('Preparing Power BI download…',async()=>{await saveDesign();return download('/download?run_id='+run.id,'Pivotra-powerbi.zip');}));$('download-excel').addEventListener('click',()=>task('Preparing your cleaned workbook…',()=>download('/download/excel?run_id='+run.id,'Pivotra-cleaned.xlsx')));
 $('path-form').addEventListener('submit',event=>{event.preventDefault();task('Opening local workbook…',async()=>{await openProject((await json('/upload',{source_path:$('source-path').value})).project);});});
 $('sheet').addEventListener('change',before);$('table-select').addEventListener('change',renderAfter);$('cleaning-json').addEventListener('input',()=>{renderPlan();controls();});$('model-json').addEventListener('input',()=>{renderModel();controls();});
 $('run-select').addEventListener('change',()=>task('Opening saved run…',async()=>{const selected=$('run-select').value;await setRun((await json('/runs?project_id='+project.id)).runs.find(item=>item.id===selected));}));
@@ -228,4 +228,4 @@ $('download-quality').addEventListener('click',()=>task('Preparing the quality r
 $('download-quality-excel').addEventListener('click',()=>task('Preparing your cleaned workbook\u2026',()=>download('/download/excel?run_id='+run.id,'Pivotra-cleaned.xlsx')));
 $('reupload').addEventListener('click',()=>{scrollTo({top:0,behavior:'smooth'});$('upload').click();});
 
-$('open-powerbi').addEventListener('click',()=>task('Opening in Power BI…',async()=>{const result=await json('/open/powerbi',ids());return result.opened?'Opened in Power BI Desktop. Your project is saved in '+result.folder:'Saved to '+result.folder+'. Open the .pbip file there with Power BI Desktop.';}));
+$('open-powerbi').addEventListener('click',()=>task('Opening in Power BI…',async()=>{await saveDesign();const result=await json('/open/powerbi',ids());return result.opened?'Opened in Power BI Desktop. Your project is saved in '+result.folder:'Saved to '+result.folder+'. Open the .pbip file there with Power BI Desktop.';}));

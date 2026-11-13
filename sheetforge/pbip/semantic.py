@@ -7,6 +7,8 @@ from uuid import NAMESPACE_URL, uuid5
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from sheetforge.modeler import heuristic_model, validate_model
+from sheetforge.modeler.planning import HEADER, HEIGHT, WIDTH, layout  # noqa: F401 (re-exported)
+from sheetforge.modeler.visuals import THEMES, VISUALS, band
 from sheetforge.paths import output_stem
 from sheetforge.pbip.generator import (
     SCHEMA,
@@ -21,128 +23,86 @@ from sheetforge.pbip.power_query import power_query
 from sheetforge.pbip.validation import validate_documents
 from sheetforge.planner.heuristic import friendly
 
-HEADER, MARGIN, GAP, WIDTH, HEIGHT = 64, 24, 16, 1280, 720
-INK, CREAM, PAPER, LINE, BODY, MUTED = (
-    "#15130F",
-    "#F3ECDD",
-    "#FBF7EE",
-    "#E2D8C6",
-    "#3E3A32",
-    "#857E70",
-)
-
 
 def solid(color):
     return {"solid": {"color": color}}
 
 
-# Report-wide look (Power BI theme "visualStyles"): cream page, white rounded cards, ink text.
-THEME_STYLES = {
-    "page": {"*": {"background": [{"color": solid(CREAM), "transparency": 0}]}},
-    "*": {
-        "*": {
-            "background": [{"show": True, "color": solid("#FFFFFF"), "transparency": 0}],
-            "border": [{"show": True, "color": solid(LINE), "radius": 12}],
-            "dropShadow": [{"show": False}],
-            "padding": [{"top": 10, "bottom": 10, "left": 14, "right": 14}],
-            "title": [
-                {
-                    "show": True,
-                    "fontColor": solid(INK),
-                    "fontSize": 12,
-                    "fontFamily": "Segoe UI Semibold",
-                }
-            ],
-        }
-    },
-    "card": {
-        "*": {
-            "labels": [{"color": solid(INK), "fontSize": 30, "fontFamily": "Segoe UI Semibold"}],
-            "categoryLabels": [{"show": False}],
-        }
-    },
-    "tableEx": {
-        "*": {
-            "columnHeaders": [
-                {
-                    "fontColor": solid(CREAM),
-                    "backColor": solid(INK),
-                    "fontFamily": "Segoe UI Semibold",
-                }
-            ],
-            "values": [
-                {
-                    "fontColorPrimary": solid(BODY),
-                    "backColorPrimary": solid("#FFFFFF"),
-                    "fontColorSecondary": solid(BODY),
-                    "backColorSecondary": solid(PAPER),
-                }
-            ],
-            "grid": [{"gridHorizontalColor": solid(LINE), "gridVerticalColor": solid(LINE)}],
-        }
-    },
-    "lineChart": {"*": {"lineStyles": [{"strokeWidth": 3}]}},
-    "slicer": {"*": {"header": [{"fontColor": solid(MUTED), "fontSize": 10}]}},
-    # The header band draws its own ink background and has no border.
-    "textbox": {
-        "*": {
-            "border": [{"show": False}],
-            "padding": [{"top": 0, "bottom": 0, "left": 0, "right": 0}],
-        }
-    },
-}
+def colored(color):
+    """A per-visual color override (visual objects take expressions, not plain strings)."""
+    return {"solid": {"color": literal("'" + color + "'")}}
 
 
-def layout(specs):
-    """Dashboard grid: KPI cards on top, wide trends, side-by-side breakdowns, table last."""
-    geometry = [None] * len(specs)
-    inner = WIDTH - 2 * MARGIN
-    # Rows top to bottom: KPI cards + filters, trend, breakdowns (bar/donut), records table.
-    groups = {
-        "top": ["card", "slicer"],
-        "line": ["line"],
-        "bar": ["bar", "donut"],
-        "table": ["table"],
+def theme_styles(theme):
+    """Report-wide look (Power BI theme "visualStyles"): page color, rounded cards, ink titles."""
+    _, page, card, line, ink, muted, _ = THEMES[theme]
+    return {
+        "page": {"*": {"background": [{"color": solid(page), "transparency": 0}]}},
+        "*": {
+            "*": {
+                "background": [{"show": True, "color": solid(card), "transparency": 0}],
+                "border": [{"show": True, "color": solid(line), "radius": 12}],
+                "dropShadow": [{"show": False}],
+                "padding": [{"top": 10, "bottom": 10, "left": 14, "right": 14}],
+                "title": [
+                    {
+                        "show": True,
+                        "fontColor": solid(ink),
+                        "fontSize": 12,
+                        "fontFamily": "Segoe UI Semibold",
+                    }
+                ],
+            }
+        },
+        "card": {
+            "*": {
+                "labels": [
+                    {"color": solid(ink), "fontSize": 30, "fontFamily": "Segoe UI Semibold"}
+                ],
+                "categoryLabels": [{"show": False}],
+            }
+        },
+        "tableEx": {
+            "*": {
+                "columnHeaders": [
+                    {
+                        "fontColor": solid(card),
+                        "backColor": solid(ink),
+                        "fontFamily": "Segoe UI Semibold",
+                    }
+                ],
+                "values": [
+                    {
+                        "fontColorPrimary": solid(ink),
+                        "backColorPrimary": solid(card),
+                        "fontColorSecondary": solid(ink),
+                        "backColorSecondary": solid(page),
+                    }
+                ],
+                "grid": [{"gridHorizontalColor": solid(line), "gridVerticalColor": solid(line)}],
+            }
+        },
+        "lineChart": {"*": {"lineStyles": [{"strokeWidth": 3}]}},
+        "slicer": {"*": {"header": [{"fontColor": solid(muted), "fontSize": 10}]}},
+        # The header band draws its own background and has no border.
+        "textbox": {
+            "*": {
+                "border": [{"show": False}],
+                "padding": [{"top": 0, "bottom": 0, "left": 0, "right": 0}],
+            }
+        },
     }
-    kinds = {
-        group: [i for i, spec in enumerate(specs) if spec.kind in members]
-        for group, members in groups.items()
-    }
-    kinds["card"] = kinds.pop("top")
-    weight = {"line": 1.3, "bar": 1.0, "table": 1.0}
-    rows = [
-        (kind, kinds[kind][start : start + 3])
-        for kind in ["line", "bar", "table"]
-        for start in range(0, len(kinds[kind]), 3)
-    ]
-
-    def place(indexes, y, height):
-        width = (inner - GAP * (len(indexes) - 1)) / len(indexes)
-        for slot, index in enumerate(indexes):
-            geometry[index] = (
-                round(MARGIN + slot * (width + GAP)),
-                round(y),
-                round(width),
-                round(height),
-            )
-
-    y = HEADER + MARGIN
-    if kinds["card"]:
-        height = 110 if rows else HEIGHT - MARGIN - y
-        place(kinds["card"], y, height)
-        y += height + GAP
-    if rows:
-        available = HEIGHT - MARGIN - y - GAP * (len(rows) - 1)
-        total = sum(weight[kind] for kind, _ in rows)
-        for kind, indexes in rows:
-            height = available * weight[kind] / total
-            place(indexes, y, height)
-            y += height + GAP
-    return geometry
 
 
-def build_semantic_project(result, out, model_plan=None, name=None):
-    """name: the uploaded file name; the project, report and model are named after it."""
+# Per-box colors: charts color their bars/lines; cards color the number. Multi-color visuals
+# (pie, donut, treemap, maps) keep the theme palette so their slices stay distinguishable.
+NO_FILL = {"pie", "donut", "treemap", "map", "filled_map", "shape_map", "azure_map", "table",
+           "matrix", "slicer", "button_slicer", "list_slicer", "text_slicer"}  # fmt: skip
+
+
+def build_semantic_project(result, out, model_plan=None, name=None, images=None):
+    """name: the uploaded file name; the project, report and model are named after it.
+    images: folder holding the page background pictures the plan refers to."""
     if result.plan is None or result.source is None:
         raise ValueError("A validated cleaning result is required.")
     plan = validate_model(model_plan or heuristic_model(result.tables), result.tables)
@@ -151,6 +111,7 @@ def build_semantic_project(result, out, model_plan=None, name=None):
     if out.exists() or zipped.exists():
         raise ValueError("Output folder or ZIP already exists; choose a new output path.")
     stem = output_stem(name or result.source.name)
+    theme = THEMES[plan.theme]
     rd, md = stem + ".Report", stem + ".SemanticModel"
     documents = {
         stem + ".pbip": {
@@ -189,23 +150,27 @@ def build_semantic_project(result, out, model_plan=None, name=None):
                 {
                     "name": "RegisteredResources",
                     "type": "RegisteredResources",
-                    "items": [{"name": "Pivotra", "path": "Pivotra.json", "type": "CustomTheme"}],
+                    "items": [{"name": "Pivotra", "path": "Pivotra.json", "type": "CustomTheme"}]
+                    + [
+                        {"name": picture, "path": picture, "type": "Image"}
+                        for picture in sorted({p.image for p in plan.pages if p.image})
+                    ],
                 }
             ],
         },
         rd + "/StaticResources/RegisteredResources/Pivotra.json": {
             "name": "Pivotra",
-            "dataColors": ["#B5562A", "#2F5A43", "#D9A47E", "#15130F", "#7FA88F", "#E8C9A9"],
-            "background": "#FFFFFF",
-            "foreground": "#15130F",
-            "tableAccent": "#B5562A",
+            "dataColors": theme[6],
+            "background": theme[2],
+            "foreground": theme[4],
+            "tableAccent": theme[6][0],
             "textClasses": {
-                "title": {"fontFace": "Segoe UI Semibold", "fontSize": 13, "color": "#15130F"},
-                "label": {"fontFace": "Segoe UI", "fontSize": 10, "color": "#857E70"},
-                "callout": {"fontFace": "Segoe UI Semibold", "fontSize": 30, "color": "#15130F"},
-                "header": {"fontFace": "Segoe UI Semibold", "fontSize": 12, "color": "#15130F"},
+                "title": {"fontFace": "Segoe UI Semibold", "fontSize": 13, "color": theme[4]},
+                "label": {"fontFace": "Segoe UI", "fontSize": 10, "color": theme[5]},
+                "callout": {"fontFace": "Segoe UI Semibold", "fontSize": 30, "color": theme[4]},
+                "header": {"fontFace": "Segoe UI Semibold", "fontSize": 12, "color": theme[4]},
             },
-            "visualStyles": THEME_STYLES,
+            "visualStyles": theme_styles(plan.theme),
         },
     }
     text = {md + "/definition/database.tmdl": "database\n\tcompatibilityLevel: 1601\n"}
@@ -256,6 +221,7 @@ def build_semantic_project(result, out, model_plan=None, name=None):
         )
     if relationships:  # Power BI omits this file when a model has no relationships
         text[md + "/definition/relationships.tmdl"] = "\n".join(relationships)
+    pictures = {}
     page_names = [f"page_{i:03d}" for i in range(1, len(plan.pages) + 1)]
     documents[rd + "/definition/pages/pages.json"] = {
         "$schema": SCHEMA + "item/report/definition/pagesMetadata/1.0.0/schema.json",
@@ -273,60 +239,82 @@ def build_semantic_project(result, out, model_plan=None, name=None):
             "width": WIDTH,
             "height": HEIGHT,
         }
-        documents[f"{prefix}/visuals/visual_000/visual.json"] = textbox(
-            "visual_000", (friendly(stem) or stem) + "  ·  " + page.title, 0, 0, WIDTH, HEADER
-        )
-        for index, (spec, geometry) in enumerate(
-            zip(page.visuals, layout(page.visuals), strict=True), 1
-        ):
-            if spec.kind == "table":
-                query = {
-                    "Values": {
-                        "projections": [
-                            projection(spec.table, name)
-                            for name in [
-                                helpers[spec.table],
-                                *(spec.columns or list(result.tables[spec.table].columns)),
-                            ]
-                        ]
-                    }
+        backdrop = {"transparency": literal("0D")}
+        if page.background:
+            backdrop["color"] = colored(page.background)
+        if page.image:
+            source = Path(images or "") / page.image
+            if not images or not source.is_file():
+                raise ValueError(f"The background picture for \u201c{page.title}\u201d is missing.")
+            pictures[page.image] = source.read_bytes()
+            backdrop["image"] = {
+                "image": {
+                    "name": literal("'" + page.image + "'"),
+                    "url": {
+                        "expr": {
+                            "ResourcePackageItem": {
+                                "PackageName": "RegisteredResources",
+                                "PackageType": 1,
+                                "ItemName": page.image,
+                            }
+                        }
+                    },
+                    "scaling": literal("'" + page.image_fit + "'"),
                 }
-                # The helper keeps identical rows apart; show it as a plain row number.
-                query["Values"]["projections"][0]["displayName"] = "#"
-                kind = "tableEx"
-            elif spec.kind == "slicer":
-                query = {"Values": {"projections": [projection(spec.table, spec.category)]}}
-                kind = "slicer"
-            else:
-                owner = measures[spec.measure].table
-                value = projection(owner, spec.measure, measure=True)
-                query = (
-                    {"Values": {"projections": [value]}}
-                    if spec.kind == "card"
-                    else {
-                        "Category": {
-                            "projections": [
-                                projection(spec.table, spec.category or helpers[spec.table])
-                            ]
-                        },
-                        "Y": {"projections": [value]},
-                    }
-                )
-                kind = {
-                    "card": "card",
-                    "bar": "clusteredBarChart",
-                    "line": "lineChart",
-                    "donut": "donutChart",
-                }[spec.kind]
+            }
+        if len(backdrop) > 1:
+            documents[prefix + "/page.json"]["objects"] = {"background": [{"properties": backdrop}]}
+        documents[f"{prefix}/visuals/visual_000/visual.json"] = textbox(
+            "visual_000",
+            (friendly(stem) or stem) + "  \u00b7  " + page.title,
+            0,
+            0,
+            WIDTH,
+            HEADER,
+            color=band(plan.theme)[1],
+            background=band(plan.theme)[0],
+        )
+        for index, spec in enumerate(page.visuals, 1):
+            name = f"visual_{index:03d}"
+            geometry = (spec.x, spec.y, spec.w, spec.h)
+            kind, label, roles, _, note = VISUALS[spec.kind]
+            if kind == "textbox":
+                # Text boxes and sign-in visuals (Power Apps, ArcGIS...) become a labelled box.
+                caption = spec.title if spec.kind == "text" else f"{label}: {note}"
+                documents[f"{prefix}/visuals/{name}/visual.json"] = textbox(
+                    name, caption, *geometry, color=theme[4], background=spec.background or theme[2],
+                    size="12pt",
+                )  # fmt: skip
+                continue
+            query = {}
+            for field, role in roles.items():
+                if field == "columns":
+                    # The helper keeps identical rows apart; show it as a plain row number.
+                    columns = spec.columns or list(result.tables[spec.table].columns)
+                    items = [projection(spec.table, c) for c in [helpers[spec.table], *columns]]
+                    items[0]["displayName"] = "#"
+                elif field == "category" and spec.category:
+                    items = [projection(spec.table, spec.category)]
+                elif field in {"measure", "measure2"} and getattr(spec, field):
+                    measure = getattr(spec, field)
+                    items = [projection(measures[measure].table, measure, measure=True)]
+                else:
+                    continue
+                query.setdefault(role, {"projections": []})["projections"] += items
             objects = {
                 # The title already names the number; hide the duplicate grey label.
                 "card": {"categoryLabels": [{"properties": {"show": literal("false")}}]},
                 "slicer": {"data": [{"properties": {"mode": literal("'Dropdown'")}}]},
-            }.get(spec.kind)
-            name = f"visual_{index:03d}"
+            }.get(spec.kind, {})
+            if spec.color and spec.kind not in NO_FILL:
+                card = spec.kind in {"card", "multi_card"}
+                target, prop = ("labels", "color") if card else ("dataPoint", "fill")
+                objects = objects | {target: [{"properties": {prop: colored(spec.color)}}]}
             documents[f"{prefix}/visuals/{name}/visual.json"] = visual(
-                name, kind, query, spec.title, *geometry, objects=objects
-            )
+                name, kind, query, spec.title, *geometry, objects=objects or None,
+                background=spec.background or (theme[2] if page.transparency else None),
+                transparency=page.transparency,
+            )  # fmt: skip
     validated = validate_documents(documents)
     documents |= {
         "cleaning_plan.json": result.plan.model_dump(),
@@ -364,6 +352,9 @@ def build_semantic_project(result, out, model_plan=None, name=None):
         path = out / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content.encode("utf-8"))
+    for picture, content in pictures.items():
+        path = out / rd / "StaticResources" / "RegisteredResources" / picture
+        path.write_bytes(content)
     with ZipFile(zipped, "w", ZIP_DEFLATED) as archive:
         for path in sorted(out.rglob("*")):
             if path.is_file():

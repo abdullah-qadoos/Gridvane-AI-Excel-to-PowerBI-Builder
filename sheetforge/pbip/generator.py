@@ -38,7 +38,9 @@ def projection(table, column, *, measure=False):
     }
 
 
-def visual(name, kind, query, title, x, y, width, height, objects=None):
+def visual(
+    name, kind, query, title, x, y, width, height, objects=None, background=None, transparency=0
+):
     properties = {
         "show": {"expr": {"Literal": {"Value": "true"}}},
         "text": {"expr": {"Literal": {"Value": "'" + title.replace("'", "''") + "'"}}},
@@ -49,6 +51,16 @@ def visual(name, kind, query, title, x, y, width, height, objects=None):
         "visualContainerObjects": {"title": [{"properties": properties}]},
         "drillFilterOtherVisuals": True,
     }
+    if background:
+        content["visualContainerObjects"]["background"] = [
+            {
+                "properties": {
+                    "show": literal("true"),
+                    "color": {"solid": {"color": literal("'" + background + "'")}},
+                    "transparency": literal(f"{transparency}D"),
+                }
+            }
+        ]
     if objects:
         content["objects"] = objects
     return {
@@ -63,9 +75,9 @@ def literal(value):
     return {"expr": {"Literal": {"Value": value}}}
 
 
-def textbox(name, text, x, y, width, height, *, color="#F3ECDD", background="#15130F"):
+def textbox(name, text, x, y, width, height, *, color="#F3ECDD", background="#15130F", size="18pt"):
     """A static branded text band; it needs no query and never touches data."""
-    run = {"value": text, "textStyle": {"fontWeight": "bold", "fontSize": "18pt", "color": color}}
+    run = {"value": text, "textStyle": {"fontWeight": "bold", "fontSize": size, "color": color}}
     return {
         "$schema": SCHEMA + "item/report/definition/visualContainer/2.4.0/schema.json",
         "name": name,
